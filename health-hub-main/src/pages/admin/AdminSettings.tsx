@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { saveAnyCollection } from '@/lib/backendSync';
 import { toast } from 'sonner';
 import { Settings, Bell, Shield, Database, Save } from 'lucide-react';
 
@@ -46,6 +47,7 @@ export function AdminSettings() {
 
   const handleSave = (section: string) => {
     localStorage.setItem('systemSettings', JSON.stringify(settings));
+    void saveAnyCollection('systemSettings', settings);
     toast.success(`${section} settings saved successfully`);
   };
 

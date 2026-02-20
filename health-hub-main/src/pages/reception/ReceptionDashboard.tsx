@@ -555,7 +555,7 @@ function AppointmentManagement() {
 }
 
 function TokenQueue() {
-  const { data: appointments, updateItem } = useLocalStorage<Appointment>('appointments', mockAppointments);
+  const { data: appointments, addItem, updateItem } = useLocalStorage<Appointment>('appointments', mockAppointments);
   const { data: patients } = useLocalStorage('patients', mockPatients);
   const [isGenerateOpen, setIsGenerateOpen] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState('');
@@ -599,16 +599,13 @@ function TokenQueue() {
       notes: 'Walk-in patient',
     };
     
-    const storedAppointments = JSON.parse(localStorage.getItem('appointments') || '[]');
-    storedAppointments.push(newAppointment);
-    localStorage.setItem('appointments', JSON.stringify(storedAppointments));
+    addItem(newAppointment);
     
     toast.success(`Token #${newToken} generated for ${patient?.name}`);
     setIsGenerateOpen(false);
     setSelectedPatient('');
     setSelectedDepartment('');
     setPatientSearch('');
-    window.location.reload();
   };
 
   const handleCall = (apt: Appointment) => {

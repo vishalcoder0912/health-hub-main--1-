@@ -1,6 +1,8 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { loadCollection, saveCollection } from '@/lib/backendSync';
 
 export function useLocalStorage<T>(key: string, initialValue: T[]) {
+  const hydratedRef = useRef(false);
   const [data, setData] = useState<T[]>(() => {
     try {
       const stored = localStorage.getItem(key);
@@ -11,7 +13,35 @@ export function useLocalStorage<T>(key: string, initialValue: T[]) {
   });
 
   useEffect(() => {
+    let mounted = true;
+    void (async () => {
+      const localRaw = localStorage.getItem(key);
+      const localData = localRaw ? (JSON.parse(localRaw) as T[]) : initialValue;
+      const remote = await loadCollection<T>(key);
+      const shouldUseRemote =
+        !!remote && !(Array.isArray(remote) && remote.length === 0 && localData.length > 0);
+
+      if (mounted && shouldUseRemote && remote) {
+        setData(remote);
+      }
+      hydratedRef.current = true;
+
+      // If backend has an empty collection but local has initial demo data, push local data upstream.
+      if (!shouldUseRemote && localStorage.getItem('accessToken')) {
+        void saveCollection(key, localData);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [key]);
+
+  useEffect(() => {
     localStorage.setItem(key, JSON.stringify(data));
+    if (hydratedRef.current && localStorage.getItem('accessToken')) {
+      void saveCollection(key, data);
+    }
   }, [key, data]);
 
   const addItem = useCallback((item: T) => {

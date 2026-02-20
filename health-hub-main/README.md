@@ -1,73 +1,241 @@
-# Welcome to your Lovable project
+# Health Hub (Frontend + Backend) Setup Guide
 
-## Project info
+This guide is written in very simple steps.
+If you can copy-paste commands, you can run this project.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## 1. What is in this project?
 
-## How can I edit this code?
+- `health-hub-main/` (this folder): React frontend
+- `health-hub-main/backend/`: Node.js backend API
+- Database: PostgreSQL (no Docker needed)
 
-There are several ways of editing your application.
+## 2. What you need before starting
 
-**Use Lovable**
+Install these first:
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+1. Node.js (version 20+)
+2. PostgreSQL (version 14+ is fine)
+3. Git (optional, but useful)
 
-Changes made via Lovable will be committed automatically to this repo.
+Check Node version:
 
-**Use your preferred IDE**
+```powershell
+node -v
+```
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+## 3. Quick folder map
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+- Frontend env: `.env`
+- Backend env: `backend/.env`
+- Prisma schema: `backend/prisma/schema.prisma`
+- Backend start file: `backend/src/index.ts`
 
-Follow these steps:
+## 4. Backend setup (first do this)
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+Open terminal in:
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+```text
+health-hub-main/backend
+```
 
-# Step 3: Install the necessary dependencies.
-npm i
+### Step A: Install backend packages
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+```powershell
+npm install
+```
+
+### Step B: Create PostgreSQL database
+
+If PostgreSQL is installed and running, create DB:
+
+```sql
+CREATE DATABASE health_hub;
+```
+
+You can also use the provided SQL file:
+
+```powershell
+psql -U postgres -f database/postgres-setup.sql
+```
+
+### Step C: Check backend `.env`
+
+File: `backend/.env`
+
+It should contain:
+
+```env
+NODE_ENV=development
+PORT=4000
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/health_hub"
+JWT_ACCESS_SECRET="health-hub-access-secret-2026-change-this"
+JWT_REFRESH_SECRET="health-hub-refresh-secret-2026-change-this"
+JWT_ACCESS_EXPIRES_IN=15m
+JWT_REFRESH_EXPIRES_IN=7d
+CORS_ORIGIN=http://localhost:5173
+```
+
+Important:
+
+- Replace `postgres:postgres` with your real PostgreSQL username/password if different.
+
+### Step D: Generate Prisma client
+
+```powershell
+npx prisma generate
+```
+
+### Step E: Run database migrations
+
+```powershell
+npx prisma migrate dev --name init
+```
+
+### Step F: Seed sample users/data
+
+```powershell
+npm run seed
+```
+
+### Step G: Start backend server
+
+```powershell
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+Backend should run on:
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+```text
+http://localhost:4000/api/v1
+```
 
-**Use GitHub Codespaces**
+Health check URL:
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+```text
+http://localhost:4000/api/v1/health
+```
 
-## What technologies are used for this project?
+## 5. Frontend setup
 
-This project is built with:
+Open new terminal in:
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+```text
+health-hub-main
+```
 
-## How can I deploy this project?
+### Step A: Install frontend packages
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+```powershell
+npm install
+```
 
-## Can I connect a custom domain to my Lovable project?
+### Step B: Check frontend `.env`
 
-Yes, you can!
+File: `.env`
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+Make sure it has:
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+```env
+VITE_API_URL=http://localhost:4000/api/v1
+```
+
+### Step C: Start frontend
+
+```powershell
+npm run dev
+```
+
+Frontend should run on:
+
+```text
+http://localhost:5173
+```
+
+## 6. Demo login accounts
+
+Password for demo users:
+
+```text
+password123
+```
+
+Examples:
+
+- `admin@hospital.com`
+- `doctor@hospital.com`
+- `reception@hospital.com`
+- `nurse@hospital.com`
+- `pharmacy@hospital.com`
+- `lab@hospital.com`
+- `billing@hospital.com`
+- `patient@email.com`
+- `bloodbank@hospital.com`
+
+## 7. Easy start order (remember this)
+
+1. Start PostgreSQL
+2. Start backend (`backend`: `npm run dev`)
+3. Start frontend (`health-hub-main`: `npm run dev`)
+4. Open browser at `http://localhost:5173`
+
+## 8. Common errors and simple fixes
+
+### Error: `Environment variable not found: DATABASE_URL`
+
+Fix:
+
+- Make sure `backend/.env` exists
+- Make sure `DATABASE_URL` is inside it
+- Restart terminal and run again
+
+### Error: `Can't reach database server at localhost:5432`
+
+Fix:
+
+- PostgreSQL service is not running
+- Start PostgreSQL from Services or pgAdmin
+- Check port is 5432
+
+### Error: Prisma migrate fails
+
+Fix:
+
+```powershell
+npx prisma generate
+npx prisma migrate dev --name init
+```
+
+### Error: Login fails
+
+Fix:
+
+- Run seed again:
+
+```powershell
+npm run seed
+```
+
+## 9. Helpful commands
+
+Backend:
+
+```powershell
+npm run dev
+npm run build
+npx prisma studio
+```
+
+Frontend:
+
+```powershell
+npm run dev
+npm run build
+```
+
+## 10. For kids (super simple version)
+
+- Backend is the brain.
+- Frontend is the face.
+- PostgreSQL is the memory.
+- Start memory, then brain, then face.
+- Then the app works.

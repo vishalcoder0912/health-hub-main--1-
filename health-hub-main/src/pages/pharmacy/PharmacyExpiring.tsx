@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { getData, mockMedicines } from '@/lib/mockData';
+import { saveAnyCollection } from '@/lib/backendSync';
 import { Medicine } from '@/types';
 import { toast } from 'sonner';
 import { AlertTriangle, Calendar, Package, DollarSign, RotateCcw, Tag } from 'lucide-react';
@@ -87,6 +88,7 @@ export function PharmacyExpiring() {
       value: returnQuantity * selectedMedicine.unitPrice,
     });
     localStorage.setItem('medicineReturns', JSON.stringify(returns));
+    void saveAnyCollection('medicineReturns', returns);
     
     toast.success(`Returned ${returnQuantity} units of ${selectedMedicine.name}`);
     setIsReturnOpen(false);

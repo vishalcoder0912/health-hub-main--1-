@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/contexts/AuthContext';
 import { getData } from '@/lib/mockData';
+import { saveAnyCollection } from '@/lib/backendSync';
 import { toast } from 'sonner';
 import { Pill, Calendar, User, Download, RefreshCw } from 'lucide-react';
 import { exportToPDF, generateTableHTML } from '@/lib/exportUtils';
@@ -73,6 +74,7 @@ export default function PatientPrescriptions() {
       status: 'pending',
     });
     localStorage.setItem('refillRequests', JSON.stringify(refillRequests));
+    void saveAnyCollection('refillRequests', refillRequests);
     toast.success(`Refill request sent for prescription from ${prescription.doctorName}`);
   };
 

@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import { Save, User, Lock, Bell, ArrowLeft, Camera, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Switch } from '@/components/ui/switch';
+import { saveAnyCollection } from '@/lib/backendSync';
 
 export default function Profile() {
   const { user, updateUser } = useAuth();
@@ -111,6 +112,7 @@ export default function Profile() {
     const userPasswords = JSON.parse(localStorage.getItem('userPasswords') || '{}');
     userPasswords[user?.id || ''] = passwordData.newPassword;
     localStorage.setItem('userPasswords', JSON.stringify(userPasswords));
+    void saveAnyCollection('userPasswords', userPasswords);
     
     toast.success('Password changed successfully');
     setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
@@ -120,6 +122,7 @@ export default function Profile() {
     const savedNotifications = JSON.parse(localStorage.getItem('userNotifications') || '{}');
     savedNotifications[user?.id || ''] = notifications;
     localStorage.setItem('userNotifications', JSON.stringify(savedNotifications));
+    void saveAnyCollection('userNotifications', savedNotifications);
     toast.success('Notification preferences saved');
   };
 

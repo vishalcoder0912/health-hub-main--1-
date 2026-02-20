@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User, UserRole } from '@/types';
-import { mockUsers, initializeMockData } from '@/lib/mockData';
+import { initializeMockData } from '@/lib/mockData';
+import { apiRequest } from '@/lib/api';
+import { bootstrapCollectionsToLocalStorage, saveAnyCollection } from '@/lib/backendSync';
 
 interface AuthContextType {
   user: User | null;
@@ -13,51 +15,88 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const demoUserIdByEmail: Record<string, string> = {
+  'admin@hospital.com': 'admin-1',
+  'doctor@hospital.com': 'doctor-1',
+  'doctor2@hospital.com': 'doctor-2',
+  'reception@hospital.com': 'receptionist-1',
+  'nurse@hospital.com': 'nurse-1',
+  'pharmacy@hospital.com': 'pharmacy-1',
+  'lab@hospital.com': 'lab-1',
+  'billing@hospital.com': 'billing-1',
+  'patient@email.com': 'patient-1',
+  'bloodbank@hospital.com': 'bloodbank-1',
+};
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Initialize mock data on first load
-    initializeMockData();
-    
-    // Check for existing session
-    const storedUser = localStorage.getItem('currentUser');
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
-    setIsLoading(false);
+    void (async () => {
+      initializeMockData();
+
+      const storedUser = localStorage.getItem('currentUser');
+      const accessToken = localStorage.getItem('accessToken');
+
+      if (storedUser) {
+        setUser(JSON.parse(storedUser));
+      }
+
+      if (storedUser && accessToken) {
+        await bootstrapCollectionsToLocalStorage();
+      }
+
+      setIsLoading(false);
+    })();
   }, []);
 
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    // Find user by email (password is 'password123' for all demo users)
-    const foundUser = mockUsers.find(u => u.email.toLowerCase() === email.toLowerCase());
-    
-    if (!foundUser) {
-      return { success: false, error: 'Invalid email or password' };
+    try {
+      const payload = await apiRequest<{
+        user: {
+          id: string;
+          fullName: string;
+          email: string;
+          role: UserRole;
+          phone?: string;
+          createdAt: string;
+        };
+        accessToken: string;
+        refreshToken: string;
+      }>('/auth/login', {
+        method: 'POST',
+        auth: false,
+        body: JSON.stringify({ email, password }),
+      });
+
+      const userData: User = {
+        id: demoUserIdByEmail[payload.user.email.toLowerCase()] || payload.user.id,
+        name: payload.user.fullName,
+        email: payload.user.email,
+        role: payload.user.role,
+        phone: payload.user.phone,
+        createdAt: payload.user.createdAt,
+      };
+
+      localStorage.setItem('accessToken', payload.accessToken);
+      localStorage.setItem('refreshToken', payload.refreshToken);
+      localStorage.setItem('currentUser', JSON.stringify(userData));
+      setUser(userData);
+
+      await bootstrapCollectionsToLocalStorage();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Login failed' };
     }
-    
-    // Demo password check (in real app, this would be hashed)
-    if (password !== 'password123') {
-      return { success: false, error: 'Invalid email or password' };
-    }
-    
-    // Check for saved profile data
-    const savedProfiles = JSON.parse(localStorage.getItem('userProfiles') || '{}');
-    const savedProfile = savedProfiles[foundUser.id];
-    const userWithProfile = savedProfile ? { ...foundUser, ...savedProfile } : foundUser;
-    
-    setUser(userWithProfile);
-    localStorage.setItem('currentUser', JSON.stringify(userWithProfile));
-    return { success: true };
   };
 
   const logout = () => {
+    void apiRequest('/auth/logout', { method: 'POST' }).catch(() => undefined);
     setUser(null);
     localStorage.removeItem('currentUser');
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
   };
 
   const updateUser = (updates: Partial<User>) => {
@@ -70,6 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const savedProfiles = JSON.parse(localStorage.getItem('userProfiles') || '{}');
       savedProfiles[user.id] = { ...savedProfiles[user.id], ...updates };
       localStorage.setItem('userProfiles', JSON.stringify(savedProfiles));
+      void saveAnyCollection('userProfiles', savedProfiles);
     }
   };
 

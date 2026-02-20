@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  doctor
+  receptionist
+  nurse
+  pharmacy
+  laboratory
+  billing
+  patient
+  bloodbank
+}
+
+enum Gender {
+  male
+  female
+  other
+}
+
+enum AppointmentStatus {
+  scheduled
+  in_progress
+  completed
+  cancelled
+}
+
+enum AppointmentType {
+  opd
+  follow_up
+  emergency
+}
+
+model User {
+  id               String         @id @default(uuid())
+  fullName         String
+  email            String         @unique
+  passwordHash     String
+  role             UserRole
+  phone            String?
+  department       String?
+  specialization   String?
+  refreshTokenHash String?
+  lastLoginAt      DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  appointments     Appointment[]  @relation("AppointmentDoctor")
+}
+
+model Patient {
+  id               String         @id @default(uuid())
+  fullName         String
+  email            String?        @unique
+  phone            String
+  dateOfBirth      DateTime
+  gender           Gender
+  bloodGroup       String
+  address          String
+  emergencyContact String
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  appointments     Appointment[]
+}
+
+model Appointment {
+  id         String            @id @default(uuid())
+  patientId  String
+  doctorId   String
+  department String
+  date       DateTime
+  time       String
+  status     AppointmentStatus @default(scheduled)
+  type       AppointmentType   @default(opd)
+  notes      String?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor  User    @relation("AppointmentDoctor", fields: [doctorId], references: [id], onDelete: Restrict)
+
+  @@index([date])
+  @@index([doctorId])
+  @@index([patientId])
+}
+
+model DataCollection {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  items     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
