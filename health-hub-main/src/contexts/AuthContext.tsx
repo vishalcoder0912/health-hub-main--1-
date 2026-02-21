@@ -3,6 +3,7 @@ import { User, UserRole } from '@/types';
 import { initializeMockData } from '@/lib/mockData';
 import { apiRequest } from '@/lib/api';
 import { bootstrapCollectionsToLocalStorage, saveAnyCollection } from '@/lib/backendSync';
+import { bootstrapSupabaseCollectionsToLocalStorage } from '@/lib/supabaseSync';
 
 interface AuthContextType {
   user: User | null;
@@ -28,13 +29,50 @@ const demoUserIdByEmail: Record<string, string> = {
   'bloodbank@hospital.com': 'bloodbank-1',
 };
 
+const supabaseCollectionKeys = [
+  'users',
+  'patients',
+  'appointments',
+  'medicines',
+  'labTests',
+  'bills',
+  'beds',
+  'departments',
+  'vitals',
+  'prescriptions',
+  'medicalRecords',
+  'doctorNotifications',
+  'bloodDonors',
+  'bloodInventory',
+  'bloodCollections',
+  'bloodIssues',
+  'bloodRequests',
+  'bloodStorage',
+  'bloodTests',
+  'bloodActivityLogs',
+  'medicationSchedule',
+  'nursingNotes',
+  'purchaseOrders',
+  'dispenseRecords',
+  'patientConversations',
+  'patientMessages',
+  'userProfiles',
+  'staffAttendance',
+  'nurseAlerts',
+];
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     void (async () => {
-      initializeMockData();
+      const loadedFromSupabase = await bootstrapSupabaseCollectionsToLocalStorage(supabaseCollectionKeys);
+      if (!loadedFromSupabase) {
+        initializeMockData();
+      } else {
+        localStorage.setItem('initialized', 'true');
+      }
 
       const storedUser = localStorage.getItem('currentUser');
       const accessToken = localStorage.getItem('accessToken');
@@ -43,7 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(JSON.parse(storedUser));
       }
 
-      if (storedUser && accessToken) {
+      if (storedUser && accessToken && !loadedFromSupabase) {
         await bootstrapCollectionsToLocalStorage();
       }
 
@@ -84,7 +122,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.setItem('currentUser', JSON.stringify(userData));
       setUser(userData);
 
-      await bootstrapCollectionsToLocalStorage();
+      const loadedFromSupabase = await bootstrapSupabaseCollectionsToLocalStorage(supabaseCollectionKeys);
+      if (!loadedFromSupabase) {
+        await bootstrapCollectionsToLocalStorage();
+      }
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Login failed' };

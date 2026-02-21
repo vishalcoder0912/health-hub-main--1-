@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { StatsCard } from '@/components/StatsCard';
@@ -13,9 +13,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useLocalStorage } from '@/hooks/useLocalStorage';
-import { getData, mockBills, mockPatients } from '@/lib/mockData';
 import { Bill, BillItem } from '@/types';
+import {
+  createBill,
+  fetchBills,
+  fetchPatientsForBilling,
+  removeBill,
+  subscribeBills,
+  updateBill,
+  type PatientOption,
+} from '@/services/billing.service';
 import { toast } from 'sonner';
 import {
   LayoutDashboard,
@@ -23,7 +30,6 @@ import {
   CreditCard,
   FileText,
   DollarSign,
-  TrendingUp,
   Search,
   Plus,
   Download,
@@ -42,20 +48,36 @@ const navItems = [
   { title: 'Reports', href: '/billing/reports', icon: FileText },
 ];
 
-function BillingOverview() {
+function BillingOverview({
+  bills,
+  loading,
+  error,
+}: {
+  bills: Bill[];
+  loading: boolean;
+  error: string | null;
+}) {
   const navigate = useNavigate();
-  const bills = getData('bills', mockBills);
-  
+
+  if (loading) {
+    return <div className="text-sm text-muted-foreground">Loading billing overview...</div>;
+  }
+
+  if (error) {
+    return <div className="text-sm text-destructive">{error}</div>;
+  }
+
   const totalRevenue = bills.reduce((sum, bill) => sum + (bill.status === 'paid' ? bill.total : 0), 0);
   const pendingAmount = bills.reduce((sum, bill) => sum + (bill.status === 'pending' ? bill.total : 0), 0);
-  const todayInvoices = bills.filter(b => b.date === '2024-03-15').length;
-  const pendingBills = bills.filter(b => b.status === 'pending').length;
+  const todayIso = new Date().toISOString().split('T')[0];
+  const todayInvoices = bills.filter((b) => b.date === todayIso).length;
+  const pendingBills = bills.filter((b) => b.status === 'pending').length;
 
   return (
     <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <StatsCard title="Total Revenue" value={`₹${totalRevenue.toLocaleString()}`} description="This month" icon={DollarSign} trend={{ value: 12, isPositive: true }} />
-        <StatsCard title="Pending Amount" value={`₹${pendingAmount.toLocaleString()}`} description="To be collected" icon={AlertCircle} />
+        <StatsCard title="Total Revenue" value={`INR ${totalRevenue.toLocaleString()}`} description="This month" icon={DollarSign} trend={{ value: 12, isPositive: true }} />
+        <StatsCard title="Pending Amount" value={`INR ${pendingAmount.toLocaleString()}`} description="To be collected" icon={AlertCircle} />
         <StatsCard title="Today's Invoices" value={todayInvoices} description="Generated today" icon={Receipt} />
         <StatsCard title="Pending Bills" value={pendingBills} description="Awaiting payment" icon={CreditCard} />
       </div>
@@ -93,7 +115,7 @@ function BillingOverview() {
                   <TableRow key={bill.id}>
                     <TableCell><Badge variant="outline">{bill.id.toUpperCase()}</Badge></TableCell>
                     <TableCell className="font-medium">{bill.patientName}</TableCell>
-                    <TableCell className="font-semibold">₹{bill.total.toFixed(2)}</TableCell>
+                    <TableCell className="font-semibold">INR {bill.total.toFixed(2)}</TableCell>
                     <TableCell><StatusBadge status={bill.status} /></TableCell>
                     <TableCell>
                       <div className="flex gap-2">
@@ -117,17 +139,17 @@ function BillingOverview() {
             <CardContent>
               <div className="space-y-4">
                 <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                  <span className="text-sm">Cash</span><span className="font-semibold">₹4,500.00</span>
+                  <span className="text-sm">Cash</span><span className="font-semibold">INR 4,500.00</span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                  <span className="text-sm">Credit Card</span><span className="font-semibold">₹8,900.00</span>
+                  <span className="text-sm">Credit Card</span><span className="font-semibold">INR 8,900.00</span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                  <span className="text-sm">Insurance</span><span className="font-semibold">₹12,500.00</span>
+                  <span className="text-sm">Insurance</span><span className="font-semibold">INR 12,500.00</span>
                 </div>
                 <div className="border-t pt-4">
                   <div className="flex justify-between items-center">
-                    <span className="font-medium">Total Collected</span><span className="text-xl font-bold">₹25,900.00</span>
+                    <span className="font-medium">Total Collected</span><span className="text-xl font-bold">INR 25,900.00</span>
                   </div>
                 </div>
               </div>
@@ -139,11 +161,11 @@ function BillingOverview() {
               <CardTitle className="flex items-center gap-2"><AlertCircle className="h-5 w-5 text-destructive" />Overdue Payments</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {bills.filter(b => b.status === 'pending').map((bill) => (
+              {bills.filter((b) => b.status === 'pending').map((bill) => (
                 <div key={bill.id} className="p-3 border border-destructive/20 bg-destructive/5 rounded-lg">
                   <div className="flex justify-between items-center mb-1">
                     <span className="font-medium text-sm">{bill.patientName}</span>
-                    <span className="font-semibold text-destructive">₹{bill.total.toFixed(2)}</span>
+                    <span className="font-semibold text-destructive">INR {bill.total.toFixed(2)}</span>
                   </div>
                   <p className="text-xs text-muted-foreground">Invoice: {bill.id.toUpperCase()}</p>
                   <Button size="sm" variant="outline" className="mt-2 h-7 text-xs w-full" onClick={() => navigate('/billing/dues')}>Send Reminder</Button>
@@ -157,24 +179,58 @@ function BillingOverview() {
   );
 }
 
-function InvoiceManagement() {
-  const { data: bills, addItem, updateItem, deleteItem } = useLocalStorage<Bill>('bills', mockBills);
-  const patients = getData('patients', mockPatients);
+type FormLineItem = BillItem & { id: string };
+
+type BillFormState = {
+  patientId: string;
+  items: FormLineItem[];
+  discount: number;
+  status: Bill['status'];
+  paymentMethod: string;
+};
+
+const createDefaultLineItem = (): FormLineItem => ({
+  id: crypto.randomUUID(),
+  description: '',
+  quantity: 1,
+  unitPrice: 0,
+  total: 0,
+});
+
+const createInitialFormState = (): BillFormState => ({
+  patientId: '',
+  items: [createDefaultLineItem()],
+  discount: 0,
+  status: 'pending',
+  paymentMethod: '',
+});
+
+function InvoiceManagement({
+  bills,
+  patients,
+  loading,
+  error,
+  onCreate,
+  onUpdate,
+  onDelete,
+}: {
+  bills: Bill[];
+  patients: PatientOption[];
+  loading: boolean;
+  error: string | null;
+  onCreate: (input: Omit<Bill, 'id'>) => Promise<void>;
+  onUpdate: (id: string, input: Partial<Omit<Bill, 'id'>>) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+}) {
   const [searchQuery, setSearchQuery] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
   const [deleteBillId, setDeleteBillId] = useState<string | null>(null);
+  const [formData, setFormData] = useState<BillFormState>(createInitialFormState());
 
-  const [formData, setFormData] = useState({
-    patientId: '',
-    items: [{ description: '', quantity: 1, unitPrice: 0, total: 0 }] as BillItem[],
-    discount: 0,
-    status: 'pending' as Bill['status'],
-    paymentMethod: '',
-  });
-
-  const filteredBills = bills.filter(b =>
+  const filteredBills = bills.filter((b) =>
     b.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
     b.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -183,13 +239,13 @@ function InvoiceManagement() {
     { key: 'id', header: 'Invoice ID', render: (b) => <Badge variant="outline">{b.id.toUpperCase()}</Badge> },
     { key: 'patientName', header: 'Patient', render: (b) => <span className="font-medium">{b.patientName}</span> },
     { key: 'date', header: 'Date', render: (b) => new Date(b.date).toLocaleDateString() },
-    { key: 'total', header: 'Amount', render: (b) => <span className="font-semibold">₹{b.total.toFixed(2)}</span> },
+    { key: 'total', header: 'Amount', render: (b) => <span className="font-semibold">INR {b.total.toFixed(2)}</span> },
     { key: 'status', header: 'Status', render: (b) => <StatusBadge status={b.status} /> },
   ];
 
   const handleAdd = () => {
     setEditingBill(null);
-    setFormData({ patientId: '', items: [{ description: '', quantity: 1, unitPrice: 0, total: 0 }], discount: 0, status: 'pending', paymentMethod: '' });
+    setFormData(createInitialFormState());
     setIsFormOpen(true);
   };
 
@@ -197,7 +253,7 @@ function InvoiceManagement() {
     setEditingBill(bill);
     setFormData({
       patientId: bill.patientId,
-      items: bill.items,
+      items: bill.items.map((item) => ({ ...item, id: crypto.randomUUID() })),
       discount: bill.discount,
       status: bill.status,
       paymentMethod: bill.paymentMethod || '',
@@ -210,58 +266,94 @@ function InvoiceManagement() {
     setIsDeleteOpen(true);
   };
 
-  const confirmDelete = () => {
-    if (deleteBillId) {
-      deleteItem(deleteBillId);
+  const confirmDelete = async () => {
+    if (!deleteBillId) return;
+    try {
+      await onDelete(deleteBillId);
       toast.success('Invoice deleted');
       setIsDeleteOpen(false);
+    } catch (deleteError: any) {
+      console.error('Delete invoice failed:', deleteError);
+      toast.error(deleteError?.message || 'Failed to delete invoice');
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const patient = patients.find(p => p.id === formData.patientId);
-    const subtotal = formData.items.reduce((sum, item) => sum + item.total, 0);
-    const tax = subtotal * 0.1;
-    const total = subtotal - formData.discount + tax;
+    try {
+      setIsSaving(true);
+      const patient = patients.find((p) => p.id === formData.patientId);
 
-    if (editingBill) {
-      updateItem(editingBill.id, { ...formData, patientName: patient?.name || '', subtotal, tax, total });
-      toast.success('Invoice updated');
-    } else {
-      const newBill: Bill = {
-        id: `bill-${Date.now()}`,
+      if (!patient) {
+        toast.error('Select a patient');
+        return;
+      }
+
+      const items: BillItem[] = formData.items.map(({ id, ...item }) => item);
+      const subtotal = items.reduce((sum, item) => sum + item.total, 0);
+      const tax = subtotal * 0.1;
+      const total = subtotal - formData.discount + tax;
+      const payload: Omit<Bill, 'id'> = {
         patientId: formData.patientId,
-        patientName: patient?.name || '',
-        date: new Date().toISOString().split('T')[0],
-        items: formData.items,
+        patientName: patient.name,
+        date: editingBill?.date || new Date().toISOString().split('T')[0],
+        items,
         subtotal,
         discount: formData.discount,
         tax,
         total,
-        status: 'pending',
+        status: formData.status,
+        paymentMethod: formData.paymentMethod || undefined,
       };
-      addItem(newBill);
-      toast.success('Invoice created');
+
+      if (editingBill) {
+        await onUpdate(editingBill.id, payload);
+        toast.success('Invoice updated');
+      } else {
+        await onCreate(payload);
+        toast.success('Invoice created');
+      }
+
+      setFormData(createInitialFormState());
+      setEditingBill(null);
+      setIsFormOpen(false);
+    } catch (saveError: any) {
+      console.error('Save invoice failed:', saveError);
+      toast.error(saveError?.message || 'Failed to save invoice');
+    } finally {
+      setIsSaving(false);
     }
-    setIsFormOpen(false);
   };
 
   const addLineItem = () => {
-    setFormData({ ...formData, items: [...formData.items, { description: '', quantity: 1, unitPrice: 0, total: 0 }] });
+    setFormData({ ...formData, items: [...formData.items, createDefaultLineItem()] });
   };
 
-  const updateLineItem = (index: number, field: keyof BillItem, value: string | number) => {
-    const newItems = [...formData.items];
-    newItems[index] = { ...newItems[index], [field]: value };
-    if (field === 'quantity' || field === 'unitPrice') {
-      newItems[index].total = newItems[index].quantity * newItems[index].unitPrice;
-    }
-    setFormData({ ...formData, items: newItems });
+  const removeLineItem = (id: string) => {
+    if (formData.items.length === 1) return;
+    setFormData({ ...formData, items: formData.items.filter((item) => item.id !== id) });
   };
+
+  const updateLineItem = (id: string, field: keyof BillItem, value: string | number) => {
+    const items = formData.items.map((item) => {
+      if (item.id !== id) return item;
+      const updated = { ...item, [field]: value };
+      if (field === 'quantity' || field === 'unitPrice') {
+        updated.total = updated.quantity * updated.unitPrice;
+      }
+      return updated;
+    });
+    setFormData({ ...formData, items });
+  };
+
+  if (loading) {
+    return <div className="text-sm text-muted-foreground">Loading invoices...</div>;
+  }
 
   return (
     <div className="space-y-6">
+      {error && <div className="text-sm text-destructive">{error}</div>}
+
       <DataTable
         title="Invoices"
         description="Manage billing invoices"
@@ -290,24 +382,22 @@ function InvoiceManagement() {
                   <Select value={formData.patientId} onValueChange={(v) => setFormData({ ...formData, patientId: v })}>
                     <SelectTrigger><SelectValue placeholder="Select patient" /></SelectTrigger>
                     <SelectContent>
-                      {patients.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                      {patients.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
-                {editingBill && (
-                  <div className="space-y-2">
-                    <Label>Status</Label>
-                    <Select value={formData.status} onValueChange={(v) => setFormData({ ...formData, status: v as Bill['status'] })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="pending">Pending</SelectItem>
-                        <SelectItem value="paid">Paid</SelectItem>
-                        <SelectItem value="partial">Partial</SelectItem>
-                        <SelectItem value="cancelled">Cancelled</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
+                <div className="space-y-2">
+                  <Label>Status</Label>
+                  <Select value={formData.status} onValueChange={(v) => setFormData({ ...formData, status: v as Bill['status'] })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="paid">Paid</SelectItem>
+                      <SelectItem value="partial">Partial</SelectItem>
+                      <SelectItem value="cancelled">Cancelled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -315,19 +405,20 @@ function InvoiceManagement() {
                   <Label>Line Items</Label>
                   <Button type="button" variant="outline" size="sm" onClick={addLineItem}>Add Item</Button>
                 </div>
-                {formData.items.map((item, index) => (
-                  <div key={index} className="grid grid-cols-4 gap-2">
-                    <Input placeholder="Description" value={item.description} onChange={(e) => updateLineItem(index, 'description', e.target.value)} />
-                    <Input type="number" placeholder="Qty" value={item.quantity} onChange={(e) => updateLineItem(index, 'quantity', parseInt(e.target.value) || 0)} />
-                    <Input type="number" step="0.01" placeholder="Price" value={item.unitPrice} onChange={(e) => updateLineItem(index, 'unitPrice', parseFloat(e.target.value) || 0)} />
+                {formData.items.map((item) => (
+                  <div key={item.id} className="grid grid-cols-5 gap-2">
+                    <Input placeholder="Description" value={item.description} onChange={(e) => updateLineItem(item.id, 'description', e.target.value)} />
+                    <Input type="number" placeholder="Qty" value={item.quantity} onChange={(e) => updateLineItem(item.id, 'quantity', parseInt(e.target.value, 10) || 0)} />
+                    <Input type="number" step="0.01" placeholder="Price" value={item.unitPrice} onChange={(e) => updateLineItem(item.id, 'unitPrice', parseFloat(e.target.value) || 0)} />
                     <Input type="number" placeholder="Total" value={item.total.toFixed(2)} disabled />
+                    <Button type="button" variant="outline" onClick={() => removeLineItem(item.id)}>Remove</Button>
                   </div>
                 ))}
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Discount (₹)</Label>
+                  <Label>Discount (INR)</Label>
                   <Input type="number" step="0.01" value={formData.discount} onChange={(e) => setFormData({ ...formData, discount: parseFloat(e.target.value) || 0 })} />
                 </div>
                 {formData.status === 'paid' && (
@@ -347,7 +438,7 @@ function InvoiceManagement() {
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsFormOpen(false)}>Cancel</Button>
-              <Button type="submit">{editingBill ? 'Update' : 'Create'}</Button>
+              <Button type="submit" disabled={isSaving}>{isSaving ? 'Saving...' : editingBill ? 'Update' : 'Create'}</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -358,9 +449,22 @@ function InvoiceManagement() {
   );
 }
 
-function PendingDues() {
-  const bills = getData('bills', mockBills);
-  const pendingBills = bills.filter(b => b.status === 'pending');
+function PendingDues({
+  bills,
+  loading,
+  error,
+  onRecordPayment,
+}: {
+  bills: Bill[];
+  loading: boolean;
+  error: string | null;
+  onRecordPayment: (bill: Bill) => Promise<void>;
+}) {
+  const pendingBills = bills.filter((b) => b.status === 'pending');
+
+  if (loading) {
+    return <div className="text-sm text-muted-foreground">Loading pending dues...</div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -368,13 +472,14 @@ function PendingDues() {
         <h2 className="text-2xl font-bold">Pending Dues</h2>
         <p className="text-muted-foreground">Outstanding payments to be collected</p>
       </div>
+      {error && <div className="text-sm text-destructive">{error}</div>}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {pendingBills.map((bill) => (
           <Card key={bill.id} className="border-destructive/50">
             <CardHeader>
               <div className="flex justify-between items-center">
                 <CardTitle className="text-lg">{bill.patientName}</CardTitle>
-                <Badge variant="destructive">₹{bill.total.toFixed(2)}</Badge>
+                <Badge variant="destructive">INR {bill.total.toFixed(2)}</Badge>
               </div>
               <CardDescription>Invoice: {bill.id.toUpperCase()}</CardDescription>
             </CardHeader>
@@ -384,7 +489,7 @@ function PendingDues() {
                 <div className="flex justify-between text-sm"><span className="text-muted-foreground">Items</span><span>{bill.items.length}</span></div>
               </div>
               <div className="flex gap-2">
-                <Button className="flex-1" size="sm" onClick={() => toast.success('Payment recorded')}>Record Payment</Button>
+                <Button className="flex-1" size="sm" onClick={() => onRecordPayment(bill)}>Record Payment</Button>
                 <Button variant="outline" size="sm" onClick={() => toast.success('Reminder sent')}>Send Reminder</Button>
               </div>
             </CardContent>
@@ -398,26 +503,110 @@ function PendingDues() {
   );
 }
 
-function ComingSoon({ title }: { title: string }) {
-  return (
-    <div className="flex items-center justify-center h-64">
-      <div className="text-center">
-        <h2 className="text-2xl font-bold mb-2">{title}</h2>
-        <p className="text-muted-foreground">This feature is coming soon</p>
-      </div>
-    </div>
-  );
-}
-
 export default function BillingDashboard() {
+  const [bills, setBills] = useState<Bill[]>([]);
+  const [patients, setPatients] = useState<PatientOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const [billData, patientData] = await Promise.all([fetchBills(), fetchPatientsForBilling()]);
+      setBills(billData);
+      setPatients(patientData);
+    } catch (loadError: any) {
+      console.error('Load billing data failed:', loadError);
+      setError(loadError?.message || 'Failed to load billing data');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const refreshBills = useCallback(async () => {
+    try {
+      const billData = await fetchBills();
+      setBills(billData);
+    } catch (refreshError: any) {
+      console.error('Refresh bills failed:', refreshError);
+      setError(refreshError?.message || 'Failed to refresh bills');
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+    const unsubscribe = subscribeBills(() => {
+      refreshBills();
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [loadData, refreshBills]);
+
+  const createBillRecord = useCallback(async (input: Omit<Bill, 'id'>) => {
+    await createBill(input);
+    await refreshBills();
+  }, [refreshBills]);
+
+  const updateBillRecord = useCallback(async (id: string, input: Partial<Omit<Bill, 'id'>>) => {
+    await updateBill(id, input);
+    await refreshBills();
+  }, [refreshBills]);
+
+  const deleteBillRecord = useCallback(async (id: string) => {
+    await removeBill(id);
+    await refreshBills();
+  }, [refreshBills]);
+
+  const recordPayment = useCallback(async (bill: Bill) => {
+    try {
+      await updateBillRecord(bill.id, { status: 'paid' });
+      toast.success('Payment recorded');
+    } catch (recordPaymentError: any) {
+      console.error('Record payment failed:', recordPaymentError);
+      toast.error(recordPaymentError?.message || 'Failed to record payment');
+    }
+  }, [updateBillRecord]);
+
+  const sortedBills = useMemo(() => {
+    return [...bills].sort((a, b) => b.date.localeCompare(a.date));
+  }, [bills]);
+
   return (
     <DashboardLayout navItems={navItems} title="Billing Dashboard">
       <Routes>
-        <Route index element={<BillingOverview />} />
-        <Route path="new" element={<InvoiceManagement />} />
-        <Route path="invoices" element={<InvoiceManagement />} />
+        <Route index element={<BillingOverview bills={sortedBills} loading={loading} error={error} />} />
+        <Route
+          path="new"
+          element={
+            <InvoiceManagement
+              bills={sortedBills}
+              patients={patients}
+              loading={loading}
+              error={error}
+              onCreate={createBillRecord}
+              onUpdate={updateBillRecord}
+              onDelete={deleteBillRecord}
+            />
+          }
+        />
+        <Route
+          path="invoices"
+          element={
+            <InvoiceManagement
+              bills={sortedBills}
+              patients={patients}
+              loading={loading}
+              error={error}
+              onCreate={createBillRecord}
+              onUpdate={updateBillRecord}
+              onDelete={deleteBillRecord}
+            />
+          }
+        />
         <Route path="payments" element={<BillingPayments />} />
-        <Route path="dues" element={<PendingDues />} />
+        <Route path="dues" element={<PendingDues bills={sortedBills} loading={loading} error={error} onRecordPayment={recordPayment} />} />
         <Route path="reports" element={<BillingReports />} />
       </Routes>
     </DashboardLayout>
