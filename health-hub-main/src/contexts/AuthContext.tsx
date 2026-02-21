@@ -1,8 +1,7 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { Session, User as SupabaseUser } from '@supabase/supabase-js';
 import { User, UserRole } from '@/types';
-import { initializeMockData } from '@/lib/mockData';
-import { apiRequest } from '@/lib/api';
-import { bootstrapCollectionsToLocalStorage, saveAnyCollection } from '@/lib/backendSync';
+import { supabase } from '@/utils/supabase';
 import { bootstrapSupabaseCollectionsToLocalStorage } from '@/lib/supabaseSync';
 
 interface AuthContextType {
@@ -10,26 +9,13 @@ interface AuthContextType {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
-  updateUser: (updates: Partial<User>) => void;
+  updateUser: (updates: Partial<User>) => Promise<void>;
   isAuthenticated: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const demoUserIdByEmail: Record<string, string> = {
-  'admin@hospital.com': 'admin-1',
-  'doctor@hospital.com': 'doctor-1',
-  'doctor2@hospital.com': 'doctor-2',
-  'reception@hospital.com': 'receptionist-1',
-  'nurse@hospital.com': 'nurse-1',
-  'pharmacy@hospital.com': 'pharmacy-1',
-  'lab@hospital.com': 'lab-1',
-  'billing@hospital.com': 'billing-1',
-  'patient@email.com': 'patient-1',
-  'bloodbank@hospital.com': 'bloodbank-1',
-};
-
-const supabaseCollectionKeys = [
+const collectionKeys = [
   'users',
   'patients',
   'appointments',
@@ -61,122 +47,165 @@ const supabaseCollectionKeys = [
   'nurseAlerts',
 ];
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+function parseRole(user: SupabaseUser): UserRole | null {
+  const metadataRole = (user.user_metadata?.role || user.app_metadata?.role) as UserRole | undefined;
+  if (!metadataRole) return null;
+  const allowed: UserRole[] = [
+    'admin',
+    'doctor',
+    'receptionist',
+    'nurse',
+    'pharmacy',
+    'laboratory',
+    'billing',
+    'patient',
+    'bloodbank',
+  ];
+  return allowed.includes(metadataRole) ? metadataRole : null;
+}
+
+function mapSupabaseUser(user: SupabaseUser): User | null {
+  const role = parseRole(user);
+  if (!role) return null;
+
+  const fullName =
+    (user.user_metadata?.full_name as string | undefined) ||
+    (user.user_metadata?.name as string | undefined) ||
+    user.email?.split('@')[0] ||
+    'User';
+
+  return {
+    id: user.id,
+    name: fullName,
+    email: user.email || '',
+    role,
+    phone: (user.user_metadata?.phone as string | undefined) || undefined,
+    department: (user.user_metadata?.department as string | undefined) || undefined,
+    specialization: (user.user_metadata?.specialization as string | undefined) || undefined,
+    avatar: (user.user_metadata?.avatar as string | undefined) || undefined,
+    createdAt: user.created_at || new Date().toISOString(),
+  };
+}
+
+async function hydrateCollections(): Promise<void> {
+  await bootstrapSupabaseCollectionsToLocalStorage(collectionKeys);
+}
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    let mounted = true;
+
     void (async () => {
-      const loadedFromSupabase = await bootstrapSupabaseCollectionsToLocalStorage(supabaseCollectionKeys);
-      if (!loadedFromSupabase) {
-        initializeMockData();
-      } else {
-        localStorage.setItem('initialized', 'true');
+      const { data, error } = await supabase.auth.getSession();
+      if (error) {
+        console.error('[Auth:getSession]', error.message);
       }
 
-      const storedUser = localStorage.getItem('currentUser');
-      const accessToken = localStorage.getItem('accessToken');
+      if (!mounted) return;
 
-      if (storedUser) {
-        setUser(JSON.parse(storedUser));
+      const currentSession = data.session;
+      setSession(currentSession);
+      setUser(currentSession?.user ? mapSupabaseUser(currentSession.user) : null);
+
+      if (currentSession) {
+        await hydrateCollections();
       }
-
-      if (storedUser && accessToken && !loadedFromSupabase) {
-        await bootstrapCollectionsToLocalStorage();
-      }
-
       setIsLoading(false);
     })();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setUser(nextSession?.user ? mapSupabaseUser(nextSession.user) : null);
+      if (nextSession) {
+        void hydrateCollections();
+      }
+    });
+
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
-    try {
-      const payload = await apiRequest<{
-        user: {
-          id: string;
-          fullName: string;
-          email: string;
-          role: UserRole;
-          phone?: string;
-          createdAt: string;
-        };
-        accessToken: string;
-        refreshToken: string;
-      }>('/auth/login', {
-        method: 'POST',
-        auth: false,
-        body: JSON.stringify({ email, password }),
-      });
-
-      const userData: User = {
-        id: demoUserIdByEmail[payload.user.email.toLowerCase()] || payload.user.id,
-        name: payload.user.fullName,
-        email: payload.user.email,
-        role: payload.user.role,
-        phone: payload.user.phone,
-        createdAt: payload.user.createdAt,
-      };
-
-      localStorage.setItem('accessToken', payload.accessToken);
-      localStorage.setItem('refreshToken', payload.refreshToken);
-      localStorage.setItem('currentUser', JSON.stringify(userData));
-      setUser(userData);
-
-      const loadedFromSupabase = await bootstrapSupabaseCollectionsToLocalStorage(supabaseCollectionKeys);
-      if (!loadedFromSupabase) {
-        await bootstrapCollectionsToLocalStorage();
-      }
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Login failed' };
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      return { success: false, error: error.message };
     }
+
+    const mappedUser = data.user ? mapSupabaseUser(data.user) : null;
+    if (!mappedUser) {
+      await supabase.auth.signOut();
+      return { success: false, error: 'Role metadata missing or invalid for this account.' };
+    }
+
+    setUser(mappedUser);
+    setSession(data.session);
+    await hydrateCollections();
+    localStorage.setItem('currentUser', JSON.stringify(mappedUser));
+    return { success: true };
   };
 
   const logout = () => {
-    void apiRequest('/auth/logout', { method: 'POST' }).catch(() => undefined);
+    void supabase.auth.signOut();
     setUser(null);
+    setSession(null);
     localStorage.removeItem('currentUser');
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
   };
 
-  const updateUser = (updates: Partial<User>) => {
-    if (user) {
-      const updatedUser = { ...user, ...updates };
-      setUser(updatedUser);
-      localStorage.setItem('currentUser', JSON.stringify(updatedUser));
-      
-      // Also persist to userProfiles for future logins
-      const savedProfiles = JSON.parse(localStorage.getItem('userProfiles') || '{}');
-      savedProfiles[user.id] = { ...savedProfiles[user.id], ...updates };
-      localStorage.setItem('userProfiles', JSON.stringify(savedProfiles));
-      void saveAnyCollection('userProfiles', savedProfiles);
+  const updateUser = async (updates: Partial<User>) => {
+    if (!session?.user) return;
+
+    const nextMetadata = {
+      ...session.user.user_metadata,
+      full_name: updates.name ?? session.user.user_metadata?.full_name,
+      role: updates.role ?? session.user.user_metadata?.role,
+      phone: updates.phone ?? session.user.user_metadata?.phone,
+      department: updates.department ?? session.user.user_metadata?.department,
+      specialization: updates.specialization ?? session.user.user_metadata?.specialization,
+      avatar: updates.avatar ?? session.user.user_metadata?.avatar,
+    };
+
+    const { data, error } = await supabase.auth.updateUser({ data: nextMetadata });
+    if (error) {
+      console.error('[Auth:updateUser]', error.message);
+      return;
+    }
+
+    const mapped = data.user ? mapSupabaseUser(data.user) : null;
+    if (mapped) {
+      setUser(mapped);
+      localStorage.setItem('currentUser', JSON.stringify(mapped));
     }
   };
 
-  return (
-    <AuthContext.Provider value={{
+  const value = useMemo<AuthContextType>(
+    () => ({
       user,
       isLoading,
       login,
       logout,
       updateUser,
-      isAuthenticated: !!user,
-    }}>
-      {children}
-    </AuthContext.Provider>
+      isAuthenticated: !!session && !!user,
+    }),
+    [isLoading, session, user]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (context === undefined) {
+  if (!context) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
 }
 
-// Role-based access helper
 export function hasAccess(userRole: UserRole | undefined, allowedRoles: UserRole[]): boolean {
   if (!userRole) return false;
   return allowedRoles.includes(userRole);

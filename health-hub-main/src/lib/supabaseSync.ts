@@ -1,6 +1,8 @@
+import { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '@/utils/supabase';
+import { getAll } from '@/services/base.service';
 
-const keyToTableMap: Record<string, string[]> = {
+export const keyToTableMap: Record<string, string[]> = {
   users: ['users'],
   patients: ['patients'],
   appointments: ['appointments'],
@@ -34,15 +36,65 @@ const keyToTableMap: Record<string, string[]> = {
 
 const resolvedTableCache = new Map<string, string | null>();
 
+type IdRecord = Record<string, unknown> & { id?: string };
+
+function normalizeError(context: string, error: unknown): void {
+  if (error instanceof Error) {
+    console.error(`[SupabaseSync:${context}] ${error.message}`);
+    return;
+  }
+  console.error(`[SupabaseSync:${context}] Unknown error`);
+}
+
 async function tableExists(tableName: string): Promise<boolean> {
   const { error } = await supabase.from(tableName).select('*', { count: 'exact', head: true });
   return !error;
 }
 
-export async function resolveTableNameForKey(key: string): Promise<string | null> {
-  if (resolvedTableCache.has(key)) {
-    return resolvedTableCache.get(key) ?? null;
+function getSyntheticId(key: string, item: Record<string, unknown>): string | null {
+  if (key === 'staffAttendance') {
+    const staffId = typeof item.oddbodyId === 'string' ? item.oddbodyId : null;
+    const date = typeof item.date === 'string' ? item.date : null;
+    if (staffId && date) return `${staffId}_${date}`;
   }
+  return null;
+}
+
+function normalizeWithId<T>(key: string, items: T[]): Array<T & { id: string }> | null {
+  const normalized: Array<T & { id: string }> = [];
+  for (const raw of items) {
+    const value = raw as Record<string, unknown>;
+    if (typeof value.id === 'string') {
+      normalized.push(raw as T & { id: string });
+      continue;
+    }
+
+    const syntheticId = getSyntheticId(key, value);
+    if (!syntheticId) return null;
+    normalized.push({ ...(raw as object), id: syntheticId } as T & { id: string });
+  }
+  return normalized;
+}
+
+function dedupeById<T extends IdRecord>(rows: T[]): T[] {
+  const map = new Map<string, T>();
+  const result: T[] = [];
+
+  for (const row of rows) {
+    if (!row.id) {
+      result.push(row);
+      continue;
+    }
+    if (!map.has(row.id)) {
+      map.set(row.id, row);
+      result.push(row);
+    }
+  }
+  return result;
+}
+
+export async function resolveTableNameForKey(key: string): Promise<string | null> {
+  if (resolvedTableCache.has(key)) return resolvedTableCache.get(key) ?? null;
 
   const candidates = keyToTableMap[key] ?? [key];
   for (const tableName of candidates) {
@@ -57,58 +109,72 @@ export async function resolveTableNameForKey(key: string): Promise<string | null
 }
 
 export async function fetchCollectionFromSupabase<T>(key: string): Promise<T[] | null> {
-  const tableName = await resolveTableNameForKey(key);
-  if (!tableName) return null;
+  try {
+    const tableName = await resolveTableNameForKey(key);
+    if (!tableName) return null;
 
-  const { data, error } = await supabase.from(tableName).select('*');
-  if (error) {
-    console.error(`[SupabaseSync:fetch:${key}]`, error.message);
+    const result = await getAll<T & IdRecord>(tableName);
+    if (result.error || !result.data) return null;
+    return dedupeById(result.data) as T[];
+  } catch (error) {
+    normalizeError(`fetch:${key}`, error);
     return null;
-  }
-  return Array.isArray(data) ? (data as T[]) : [];
-}
-
-export async function insertRowToSupabase<T extends { id?: string }>(key: string, item: T): Promise<void> {
-  const tableName = await resolveTableNameForKey(key);
-  if (!tableName) return;
-
-  const { error } = await supabase.from(tableName).insert([item]);
-  if (error) {
-    console.error(`[SupabaseSync:insert:${key}]`, error.message);
-  }
-}
-
-export async function updateRowInSupabase<T>(key: string, id: string, updates: Partial<T>): Promise<void> {
-  const tableName = await resolveTableNameForKey(key);
-  if (!tableName) return;
-
-  const { error } = await supabase.from(tableName).update(updates).eq('id', id);
-  if (error) {
-    console.error(`[SupabaseSync:update:${key}]`, error.message);
-  }
-}
-
-export async function deleteRowFromSupabase(key: string, id: string): Promise<void> {
-  const tableName = await resolveTableNameForKey(key);
-  if (!tableName) return;
-
-  const { error } = await supabase.from(tableName).delete().eq('id', id);
-  if (error) {
-    console.error(`[SupabaseSync:delete:${key}]`, error.message);
   }
 }
 
 export async function bootstrapSupabaseCollectionsToLocalStorage(keys: string[]): Promise<boolean> {
-  let foundAny = false;
-
+  let loadedAny = false;
   for (const key of keys) {
     const data = await fetchCollectionFromSupabase<unknown>(key);
     if (!data) continue;
     localStorage.setItem(key, JSON.stringify(data));
-    foundAny = true;
+    loadedAny = true;
   }
+  return loadedAny;
+}
 
-  return foundAny;
+export async function syncCollectionDiffToSupabase<T>(
+  key: string,
+  previousItems: T[],
+  nextItems: T[]
+): Promise<void> {
+  try {
+    const tableName = await resolveTableNameForKey(key);
+    if (!tableName) return;
+
+    const prev = normalizeWithId(key, previousItems);
+    const next = normalizeWithId(key, nextItems);
+    if (!prev || !next) return;
+
+    const prevById = new Map(prev.map((item) => [item.id, item]));
+    const nextById = new Map(next.map((item) => [item.id, item]));
+
+    const deletedIds = Array.from(prevById.keys()).filter((id) => !nextById.has(id));
+    const upserts: Array<Record<string, unknown>> = [];
+
+    for (const [id, nextItem] of nextById.entries()) {
+      const prevItem = prevById.get(id);
+      if (!prevItem || JSON.stringify(prevItem) !== JSON.stringify(nextItem)) {
+        upserts.push(nextItem as unknown as Record<string, unknown>);
+      }
+    }
+
+    if (upserts.length > 0) {
+      const { error } = await supabase.from(tableName).upsert(upserts, { onConflict: 'id' });
+      if (error) {
+        console.error(`[SupabaseSync:upsert:${key}] ${error.message}`);
+      }
+    }
+
+    if (deletedIds.length > 0) {
+      const { error } = await supabase.from(tableName).delete().in('id', deletedIds);
+      if (error) {
+        console.error(`[SupabaseSync:delete:${key}] ${error.message}`);
+      }
+    }
+  } catch (error) {
+    normalizeError(`sync:${key}`, error);
+  }
 }
 
 export async function subscribeCollectionChanges(
@@ -118,59 +184,34 @@ export async function subscribeCollectionChanges(
   const tableName = await resolveTableNameForKey(key);
   if (!tableName) return null;
 
-  const channel = supabase
+  const channel: RealtimeChannel = supabase
     .channel(`sync:${tableName}:${Math.random().toString(36).slice(2)}`)
-    .on('postgres_changes', { event: '*', schema: 'public', table: tableName }, () => {
-      onChange();
-    })
-    .subscribe();
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: tableName }, onChange)
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: tableName }, onChange)
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: tableName }, onChange)
+    .subscribe((status) => {
+      if (status === 'CHANNEL_ERROR') {
+        console.error(`[SupabaseSync:realtime:${key}] Channel error`);
+      }
+    });
 
   return () => {
     supabase.removeChannel(channel);
   };
 }
 
-function hasStringId(item: unknown): item is { id: string } {
-  return typeof (item as { id?: unknown })?.id === 'string';
-}
-
-export async function syncCollectionDiffToSupabase<T>(
-  key: string,
-  previousItems: T[],
-  nextItems: T[]
-): Promise<void> {
-  const tableName = await resolveTableNameForKey(key);
-  if (!tableName) return;
-
-  const prevWithId = previousItems.filter(hasStringId);
-  const nextWithId = nextItems.filter(hasStringId);
-
-  if (nextItems.length > 0 && nextWithId.length !== nextItems.length) {
-    return;
-  }
-  if (previousItems.length > 0 && prevWithId.length !== previousItems.length) {
-    return;
-  }
-
-  const prevIds = new Set(prevWithId.map((item) => item.id));
-  const nextIds = new Set(nextWithId.map((item) => item.id));
-  const deletedIds = Array.from(prevIds).filter((id) => !nextIds.has(id));
-
-  if (nextWithId.length > 0) {
-    const { error: upsertError } = await supabase
-      .from(tableName)
-      .upsert(nextWithId as unknown as Record<string, unknown>[], { onConflict: 'id' });
-
-    if (upsertError) {
-      console.error(`[SupabaseSync:upsert:${key}]`, upsertError.message);
-      return;
-    }
-  }
-
-  if (deletedIds.length > 0) {
-    const { error: deleteError } = await supabase.from(tableName).delete().in('id', deletedIds);
-    if (deleteError) {
-      console.error(`[SupabaseSync:delete-missing:${key}]`, deleteError.message);
-    }
-  }
+export async function subscribeMappedTables(
+  keys: string[],
+  onChange: (key: string) => void
+): Promise<() => void> {
+  const unsubs: Array<() => void> = [];
+  await Promise.all(
+    keys.map(async (key) => {
+      const unsub = await subscribeCollectionChanges(key, () => onChange(key));
+      if (unsub) unsubs.push(unsub);
+    })
+  );
+  return () => {
+    unsubs.forEach((fn) => fn());
+  };
 }

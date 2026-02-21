@@ -1,91 +1,149 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { loadCollection, saveCollection } from '@/lib/backendSync';
 import {
   fetchCollectionFromSupabase,
   subscribeCollectionChanges,
   syncCollectionDiffToSupabase,
 } from '@/lib/supabaseSync';
 
-export function useLocalStorage<T>(key: string, initialValue: T[]) {
-  const hydratedRef = useRef(false);
-  const previousDataRef = useRef<T[]>(initialValue);
-  const [data, setData] = useState<T[]>(() => {
-    try {
-      const stored = localStorage.getItem(key);
-      return stored ? JSON.parse(stored) : initialValue;
-    } catch {
-      return initialValue;
+type WithId = { id?: string };
+
+function safeParse<T>(value: string | null, fallback: T): T {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function dedupeById<T extends WithId>(items: T[]): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const item of items) {
+    if (!item?.id) {
+      result.push(item);
+      continue;
     }
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    result.push(item);
+  }
+  return result;
+}
+
+export function useLocalStorage<T extends WithId>(key: string, initialValue: T[]) {
+  const isHydratedRef = useRef(false);
+  const isApplyingRemoteRef = useRef(false);
+  const previousDataRef = useRef<T[]>(initialValue);
+  const writeTimerRef = useRef<number | null>(null);
+
+  const [data, setData] = useState<T[]>(() => {
+    const parsed = safeParse<T[]>(localStorage.getItem(key), initialValue);
+    return dedupeById(parsed);
   });
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const applyRemoteData = useCallback((next: T[]) => {
+    isApplyingRemoteRef.current = true;
+    const deduped = dedupeById(next);
+    previousDataRef.current = deduped;
+    setData(deduped);
+    window.setTimeout(() => {
+      isApplyingRemoteRef.current = false;
+    }, 0);
+  }, []);
+
+  const refreshFromSupabase = useCallback(async () => {
+    const remote = await fetchCollectionFromSupabase<T>(key);
+    if (!remote) return;
+    applyRemoteData(remote);
+  }, [applyRemoteData, key]);
 
   useEffect(() => {
     let mounted = true;
-    let unsubscribeRealtime: (() => void) | null = null;
+    let unsubscribe: (() => void) | null = null;
 
     void (async () => {
-      const localRaw = localStorage.getItem(key);
-      const localData = localRaw ? (JSON.parse(localRaw) as T[]) : initialValue;
-      const supabaseData = await fetchCollectionFromSupabase<T>(key);
-      const remote = supabaseData ?? (await loadCollection<T>(key));
-      const shouldUseRemote = !!remote;
+      try {
+        setIsLoading(true);
+        setError(null);
 
-      if (mounted && shouldUseRemote && remote) {
-        previousDataRef.current = remote;
-        setData(remote);
-      }
-      hydratedRef.current = true;
-
-      unsubscribeRealtime = await subscribeCollectionChanges(key, async () => {
+        const remote = await fetchCollectionFromSupabase<T>(key);
         if (!mounted) return;
-        const latest = await fetchCollectionFromSupabase<T>(key);
-        if (latest) {
-          setData(latest);
-        }
-      });
 
-      // Fallback sync path for legacy backend collection API.
-      if (!shouldUseRemote && localStorage.getItem('accessToken')) {
-        void saveCollection(key, localData);
+        if (remote) {
+          applyRemoteData(remote);
+        } else {
+          const local = safeParse<T[]>(localStorage.getItem(key), initialValue);
+          applyRemoteData(local);
+        }
+
+        unsubscribe = await subscribeCollectionChanges(key, () => {
+          void refreshFromSupabase();
+        });
+      } catch (syncError) {
+        const message = syncError instanceof Error ? syncError.message : `Failed to load ${key}`;
+        setError(message);
+        console.error(`[useLocalStorage:${key}:init]`, message);
+      } finally {
+        if (mounted) {
+          isHydratedRef.current = true;
+          setIsLoading(false);
+        }
       }
     })();
 
     return () => {
       mounted = false;
-      if (unsubscribeRealtime) {
-        unsubscribeRealtime();
+      if (unsubscribe) unsubscribe();
+      if (writeTimerRef.current) {
+        window.clearTimeout(writeTimerRef.current);
       }
     };
-  }, [key]);
+  }, [applyRemoteData, initialValue, key, refreshFromSupabase]);
 
   useEffect(() => {
     localStorage.setItem(key, JSON.stringify(data));
-    if (hydratedRef.current && localStorage.getItem('accessToken')) {
-      void saveCollection(key, data);
-      const prev = previousDataRef.current;
+    if (!isHydratedRef.current || isApplyingRemoteRef.current) {
       previousDataRef.current = data;
-      void syncCollectionDiffToSupabase<T>(key, prev, data);
-    } else {
-      previousDataRef.current = data;
+      return;
     }
-  }, [key, data]);
+
+    if (writeTimerRef.current) {
+      window.clearTimeout(writeTimerRef.current);
+    }
+
+    const previous = previousDataRef.current;
+    previousDataRef.current = data;
+
+    writeTimerRef.current = window.setTimeout(() => {
+      void syncCollectionDiffToSupabase<T>(key, previous, data).catch((syncError) => {
+        const message = syncError instanceof Error ? syncError.message : `Failed to sync ${key}`;
+        setError(message);
+        console.error(`[useLocalStorage:${key}:sync]`, message);
+      });
+    }, 250);
+  }, [data, key]);
 
   const addItem = useCallback((item: T) => {
-    setData((prev) => [...prev, item]);
+    setData((prev) => dedupeById([...prev, item]));
   }, []);
 
   const updateItem = useCallback((id: string, updates: Partial<T>) => {
-    setData((prev) => prev.map((item) => 
-      (item as any).id === id ? { ...item, ...updates } : item
-    ));
+    setData((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, ...updates } : item))
+    );
   }, []);
 
   const deleteItem = useCallback((id: string) => {
-    setData((prev) => prev.filter((item) => (item as any).id !== id));
+    setData((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
-  const getById = useCallback((id: string) => {
-    return data.find(item => (item as any).id === id);
-  }, [data]);
+  const getById = useCallback(
+    (id: string) => data.find((item) => item.id === id),
+    [data]
+  );
 
   return {
     data,
@@ -94,5 +152,7 @@ export function useLocalStorage<T>(key: string, initialValue: T[]) {
     updateItem,
     deleteItem,
     getById,
+    isLoading,
+    error,
   };
 }
