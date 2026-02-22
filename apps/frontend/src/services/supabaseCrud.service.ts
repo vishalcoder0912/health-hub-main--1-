@@ -42,3 +42,30 @@ export async function update<T extends TableName>(
 export async function remove(table: TableName, id: string): Promise<ServiceResult<boolean>> {
   return base.remove(getTableName(table), id);
 }
+
+/** Appointments with patient and doctor names (for lists) */
+export type AppointmentWithDetails = TableRowMap['appointments'] & {
+  patients: { full_name: string } | null;
+  doctors: { specialization: string } | null;
+};
+
+export async function getAppointmentsWithDetails(
+  options?: base.QueryOptions
+): Promise<ServiceResult<AppointmentWithDetails[]>> {
+  const table = getTableName('appointments');
+  const columns = '*, patients(full_name), doctors(specialization)';
+  return base.getAll<AppointmentWithDetails>(table, { ...options, columns: options?.columns ?? columns });
+}
+
+/** Invoices with patient name */
+export type InvoiceWithPatient = TableRowMap['invoices'] & {
+  patients: { full_name: string } | null;
+};
+
+export async function getInvoicesWithPatient(
+  options?: base.QueryOptions
+): Promise<ServiceResult<InvoiceWithPatient[]>> {
+  const table = getTableName('invoices');
+  const columns = '*, patients(full_name)';
+  return base.getAll<InvoiceWithPatient>(table, { ...options, columns: options?.columns ?? columns });
+}

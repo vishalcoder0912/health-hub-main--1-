@@ -121,7 +121,7 @@ export function PatientRecordsSupabase() {
       phone: formData.phone.trim() || null,
       email: formData.email.trim() || null,
       address: formData.address.trim() || null,
-      blood_group: formData.blood_group && BLOOD_GROUPS.includes(formData.blood_group as any) ? formData.blood_group : null,
+      blood_group: formData.blood_group && (BLOOD_GROUPS as readonly string[]).includes(formData.blood_group) ? formData.blood_group : null,
       emergency_contact: formData.emergency_contact.trim() || null,
     };
     setIsSaving(true);

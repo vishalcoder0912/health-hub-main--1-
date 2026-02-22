@@ -5,8 +5,9 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { usePatients, useDepartments, useAppointmentsWithDetails, useInvoicesWithPatient } from '@/hooks/useMedicareData';
 import { getData } from '@/lib/mockData';
-import { mockPatients, mockAppointments, mockDepartments, mockBeds, mockBills } from '@/lib/mockData';
+import { mockBeds } from '@/lib/mockData';
 import {
   LayoutDashboard,
   Users,
@@ -43,16 +44,20 @@ const navItems = [
 
 function AdminOverview() {
   const navigate = useNavigate();
-  const patients = getData('patients', mockPatients);
-  const appointments = getData('appointments', mockAppointments);
-  const departments = getData('departments', mockDepartments);
+  const { data: patients } = usePatients();
+  const { data: appointmentsWithDetails } = useAppointmentsWithDetails();
+  const { data: departments } = useDepartments();
+  const { data: invoices } = useInvoicesWithPatient();
   const beds = getData('beds', mockBeds);
-  const bills = getData('bills', mockBills);
 
-  const totalRevenue = bills.reduce((sum, bill) => sum + (bill.status === 'paid' ? bill.total : 0), 0);
-  const pendingRevenue = bills.reduce((sum, bill) => sum + (bill.status === 'pending' ? bill.total : 0), 0);
+  const totalRevenue = (invoices ?? []).reduce((sum, inv) => sum + (inv.payment_status === 'paid' ? Number(inv.amount) : 0), 0);
+  const pendingRevenue = (invoices ?? []).reduce((sum, inv) => sum + (inv.payment_status === 'unpaid' ? Number(inv.amount) : 0), 0);
   const occupiedBeds = beds.filter(b => b.status === 'occupied').length;
-  const todayAppointments = appointments.filter(a => a.date === '2024-03-15').length;
+  const today = new Date().toISOString().slice(0, 10);
+  const todayAppointments = (appointmentsWithDetails ?? []).filter(
+    a => new Date(a.appointment_date).toISOString().slice(0, 10) === today
+  ).length;
+  const recentAppointments = (appointmentsWithDetails ?? []).slice(0, 5);
 
   return (
     <div className="space-y-6">
@@ -60,7 +65,7 @@ function AdminOverview() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatsCard
           title="Total Patients"
-          value={patients.length}
+          value={(patients ?? []).length}
           description="Registered patients"
           icon={Users}
           trend={{ value: 12, isPositive: true }}
@@ -108,11 +113,11 @@ function AdminOverview() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {appointments.slice(0, 5).map((apt) => (
+                {recentAppointments.map((apt) => (
                   <TableRow key={apt.id}>
-                    <TableCell className="font-medium">{apt.patientName}</TableCell>
-                    <TableCell>{apt.doctorName}</TableCell>
-                    <TableCell>{apt.time}</TableCell>
+                    <TableCell className="font-medium">{(apt as any).patients?.full_name ?? apt.patient_id}</TableCell>
+                    <TableCell>{(apt as any).doctors?.specialization ?? apt.doctor_id}</TableCell>
+                    <TableCell>{new Date(apt.appointment_date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</TableCell>
                     <TableCell>
                       <StatusBadge status={apt.status} />
                     </TableCell>
@@ -137,18 +142,16 @@ function AdminOverview() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Department</TableHead>
-                  <TableHead>Head</TableHead>
-                  <TableHead className="text-center">Doctors</TableHead>
-                  <TableHead className="text-center">Nurses</TableHead>
+                  <TableHead>Code</TableHead>
+                  <TableHead>Description</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {departments.slice(0, 5).map((dept) => (
+                {(departments ?? []).slice(0, 5).map((dept) => (
                   <TableRow key={dept.id}>
                     <TableCell className="font-medium">{dept.name}</TableCell>
-                    <TableCell>{dept.head}</TableCell>
-                    <TableCell className="text-center">{dept.doctorCount}</TableCell>
-                    <TableCell className="text-center">{dept.nurseCount}</TableCell>
+                    <TableCell>{dept.code}</TableCell>
+                    <TableCell className="max-w-[200px] truncate">{dept.description ?? '—'}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { DataTable, Column } from '@/components/crud/DataTable';
 import { DeleteDialog } from '@/components/crud/DeleteDialog';
 import { Button } from '@/components/ui/button';
@@ -8,19 +8,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { useLocalStorage } from '@/hooks/useLocalStorage';
-import { mockPatients } from '@/lib/mockData';
+import { usePatients } from '@/hooks/useMedicareData';
+import { mapPatientRowToPatient } from '@/lib/supabase/mappers';
 import { Patient } from '@/types';
 import { toast } from 'sonner';
 
+const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'] as const;
+
 export function DoctorPatients() {
-  const { data: patients, addItem, updateItem, deleteItem } = useLocalStorage<Patient>('patients', mockPatients);
+  const { data: patientsRows, create, update, remove, isLoading } = usePatients();
+  const patients = useMemo(() => (patientsRows ?? []).map(mapPatientRowToPatient), [patientsRows]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null);
   const [deletePatientId, setDeletePatientId] = useState<string | null>(null);
-  const [viewPatient, setViewPatient] = useState<Patient | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -36,7 +39,7 @@ export function DoctorPatients() {
   const filteredPatients = patients.filter(p =>
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     p.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.phone.includes(searchQuery)
+    (p.phone && p.phone.includes(searchQuery))
   );
 
   const columns: Column<Patient>[] = [
@@ -73,29 +76,44 @@ export function DoctorPatients() {
     setIsDeleteOpen(true);
   };
 
-  const confirmDelete = () => {
-    if (deletePatientId) {
-      deleteItem(deletePatientId);
-      toast.success('Patient deleted successfully');
-      setIsDeleteOpen(false);
-      setDeletePatientId(null);
-    }
+  const confirmDelete = async () => {
+    if (!deletePatientId) return;
+    setIsSaving(true);
+    const { error } = await remove(deletePatientId);
+    setIsSaving(false);
+    if (error) toast.error(error);
+    else toast.success('Patient deleted successfully');
+    setIsDeleteOpen(false);
+    setDeletePatientId(null);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const payload = {
+      full_name: formData.name.trim(),
+      date_of_birth: formData.dateOfBirth,
+      gender: formData.gender,
+      phone: formData.phone.trim() || null,
+      email: formData.email.trim() || null,
+      address: formData.address.trim() || null,
+      blood_group: formData.bloodGroup && (BLOOD_GROUPS as readonly string[]).includes(formData.bloodGroup) ? formData.bloodGroup : null,
+      emergency_contact: formData.emergencyContact.trim() || null,
+    };
+    if (!payload.full_name || !payload.date_of_birth || !payload.gender) {
+      toast.error('Name, date of birth and gender are required');
+      return;
+    }
+    setIsSaving(true);
     if (editingPatient) {
-      updateItem(editingPatient.id, formData);
-      toast.success('Patient updated successfully');
+      const { error } = await update(editingPatient.id, payload);
+      setIsSaving(false);
+      if (error) toast.error(error);
+      else toast.success('Patient updated successfully');
     } else {
-      const newPatient: Patient = {
-        id: `patient-${Date.now()}`,
-        ...formData,
-        medicalHistory: [],
-        createdAt: new Date().toISOString().split('T')[0],
-      };
-      addItem(newPatient);
-      toast.success('Patient registered successfully');
+      const { error } = await create(payload);
+      setIsSaving(false);
+      if (error) toast.error(error);
+      else toast.success('Patient registered successfully');
     }
     setIsFormOpen(false);
   };
@@ -104,7 +122,7 @@ export function DoctorPatients() {
     <div className="space-y-6">
       <DataTable
         title="Patients"
-        description="View and manage patient records"
+        description="View and manage patient records (Supabase)"
         data={filteredPatients}
         columns={columns}
         searchQuery={searchQuery}
@@ -114,6 +132,7 @@ export function DoctorPatients() {
         onEdit={handleEdit}
         onDelete={handleDelete}
         addButtonLabel="Add Patient"
+        isLoading={isLoading}
       />
 
       <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
@@ -208,8 +227,8 @@ export function DoctorPatients() {
               </div>
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setIsFormOpen(false)}>Cancel</Button>
-              <Button type="submit">{editingPatient ? 'Update' : 'Register'}</Button>
+              <Button type="button" variant="outline" onClick={() => setIsFormOpen(false)} disabled={isSaving}>Cancel</Button>
+              <Button type="submit" disabled={isSaving}>{isSaving ? 'Saving...' : editingPatient ? 'Update' : 'Register'}</Button>
             </DialogFooter>
           </form>
         </DialogContent>

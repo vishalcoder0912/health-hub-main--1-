@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,10 +6,9 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
 import { Search, DollarSign, Clock, CheckCircle, AlertTriangle, Eye } from 'lucide-react';
-import { useLocalStorage } from '@/hooks/useLocalStorage';
-import { mockPatients, mockBills } from '@/lib/mockData';
+import { usePatients, useInvoicesWithPatient } from '@/hooks/useMedicareData';
+import { mapPatientRowToPatient } from '@/lib/supabase/mappers';
 import { Patient, Bill } from '@/types';
 import { toast } from 'sonner';
 
@@ -31,14 +30,33 @@ const isOverdue = (billDate: string, status: string): boolean => {
   return daysDiff > 30;
 };
 
+function mapInvoiceToBill(inv: { id: string; patient_id: string; amount: number; payment_status: string; due_date: string | null; created_at: string; patients: { full_name: string } | null }): Bill {
+  const patientName = inv.patients?.full_name ?? '';
+  return {
+    id: inv.id,
+    patientId: inv.patient_id,
+    patientName,
+    date: inv.due_date ?? inv.created_at.slice(0, 10),
+    items: [],
+    subtotal: Number(inv.amount),
+    discount: 0,
+    tax: 0,
+    total: Number(inv.amount),
+    status: inv.payment_status === 'paid' ? 'paid' : 'pending',
+  };
+}
+
 export function PatientManagement() {
-  const { data: patients } = useLocalStorage<Patient>('patients', mockPatients);
-  const { data: bills, updateItem: updateBill } = useLocalStorage<Bill>('bills', mockBills);
+  const { data: patientsRows } = usePatients();
+  const { data: invoicesData, update: updateInvoice } = useInvoicesWithPatient();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [isViewOpen, setIsViewOpen] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [selectedPatientBills, setSelectedPatientBills] = useState<Bill[]>([]);
+
+  const patients = useMemo(() => (patientsRows ?? []).map(mapPatientRowToPatient), [patientsRows]);
+  const bills = useMemo(() => (invoicesData ?? []).map(mapInvoiceToBill), [invoicesData]);
 
   // Get patients with their billing status
   const getPatientsWithBilling = () => {
@@ -101,15 +119,16 @@ export function PatientManagement() {
     setIsViewOpen(true);
   };
 
-  const handleMarkAsPaid = (billId: string) => {
-    const bill = bills.find(b => b.id === billId);
-    if (bill) {
-      updateBill(billId, { status: 'paid', paymentMethod: 'Cash' });
-      setSelectedPatientBills(prev => prev.map(b => 
-        b.id === billId ? { ...b, status: 'paid', paymentMethod: 'Cash' } : b
-      ));
-      toast.success('Bill marked as paid');
+  const handleMarkAsPaid = async (billId: string) => {
+    const { error } = await updateInvoice(billId, { payment_status: 'paid', paid_at: new Date().toISOString() });
+    if (error) {
+      toast.error(error);
+      return;
     }
+    setSelectedPatientBills(prev => prev.map(b =>
+      b.id === billId ? { ...b, status: 'paid' as const } : b
+    ));
+    toast.success('Bill marked as paid');
   };
 
   return (
@@ -279,9 +298,9 @@ export function PatientManagement() {
                 <TableBody>
                   {selectedPatientBills.map((bill) => (
                     <TableRow key={bill.id}>
-                      <TableCell className="font-mono text-sm">{bill.id}</TableCell>
+                      <TableCell className="font-mono text-sm">{bill.id.slice(0, 8)}</TableCell>
                       <TableCell>{bill.date}</TableCell>
-                      <TableCell>{bill.items.length} items</TableCell>
+                      <TableCell>—</TableCell>
                       <TableCell>₹{bill.total.toLocaleString()}</TableCell>
                       <TableCell>
                         <Badge className={`${billingStatusColors[bill.status as BillingStatus] || billingStatusColors.pending} capitalize`}>

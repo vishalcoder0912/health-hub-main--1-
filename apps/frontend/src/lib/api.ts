@@ -1,8 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL;
-
-if (!API_BASE_URL) {
-  throw new Error("Missing VITE_API_URL environment variable");
-}
+const API_BASE_URL = (import.meta.env.VITE_API_URL || "/api/v1").replace(/\/+$/, "");
 
 const ACCESS_TOKEN_KEY = "accessToken";
 const REFRESH_TOKEN_KEY = "refreshToken";
@@ -60,8 +56,9 @@ async function executeRequest<T>(
   accessToken: string | null
 ): Promise<T> {
   const { auth = true, headers, ...rest } = init;
+  const resolvedPath = path.startsWith("/") ? path : `/${path}`;
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${API_BASE_URL}${resolvedPath}`, {
     ...rest,
     headers: {
       "Content-Type": "application/json",

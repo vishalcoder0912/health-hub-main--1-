@@ -76,14 +76,16 @@ export default function Login() {
     setIsLoading(true);
 
     if (authMode === 'register') {
+      const normalizedEmail = email.trim().toLowerCase();
+
       if (!fullName.trim()) {
         toast({ title: 'Validation Error', description: 'Full name is required.', variant: 'destructive' });
         setIsLoading(false);
         return;
       }
 
-      if (password.length < 6) {
-        toast({ title: 'Validation Error', description: 'Password must be at least 6 characters.', variant: 'destructive' });
+      if (password.length < 8) {
+        toast({ title: 'Validation Error', description: 'Password must be at least 8 characters.', variant: 'destructive' });
         setIsLoading(false);
         return;
       }
@@ -95,7 +97,7 @@ export default function Login() {
       }
 
       const result = await register({
-        email,
+        email: normalizedEmail,
         password,
         name: fullName.trim(),
         role: selectedPortal.role,
@@ -128,7 +130,7 @@ export default function Login() {
       return;
     }
 
-    const result = await login(email, password, selectedPortal.role);
+    const result = await login(email.trim().toLowerCase(), password, selectedPortal.role);
 
     if (!result.success) {
       toast({ title: 'Login Failed', description: result.error, variant: 'destructive' });

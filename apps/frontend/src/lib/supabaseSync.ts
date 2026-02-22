@@ -5,20 +5,23 @@ import { getAll } from '@/services/base.service';
 type IdRecord = Record<string, unknown> & { id?: string };
 
 export const keyToTableMap: Record<string, string[]> = {
-  users: ['users'],
+  users: ['users', 'user_profiles'],
   patients: ['patients'],
+  doctors: ['doctors'],
   appointments: ['appointments'],
-  medicines: ['medicines'],
-  labTests: ['labTests', 'lab_tests'],
-  bills: ['bills'],
+  medicines: ['medicines', 'inventory'],
+  labTests: ['lab_tests', 'lab_reports', 'labTests'],
+  labReports: ['lab_reports', 'lab_tests', 'labReports'],
+  bills: ['bills', 'invoices'],
+  invoices: ['invoices', 'bills'],
   beds: ['beds'],
   departments: ['departments'],
   vitals: ['vitals'],
   prescriptions: ['prescriptions'],
-  medicalRecords: ['medicalRecords', 'medical_records'],
+  medicalRecords: ['medical_records', 'medicalRecords'],
   doctorNotifications: ['doctorNotifications', 'doctor_notifications'],
   bloodDonors: ['bloodDonors', 'blood_donors'],
-  bloodInventory: ['bloodInventory', 'blood_inventory'],
+  bloodInventory: ['blood_inventory', 'blood_bank', 'bloodInventory'],
   bloodCollections: ['bloodCollections', 'blood_collections'],
   bloodIssues: ['bloodIssues', 'blood_issues'],
   bloodRequests: ['bloodRequests', 'blood_requests'],
@@ -88,7 +91,21 @@ function dedupeById<T extends IdRecord>(items: T[]): T[] {
 
 async function tableExists(tableName: string): Promise<boolean> {
   const { error } = await supabase.from(tableName).select('*', { head: true, count: 'exact' });
-  return !error;
+  if (!error) return true;
+
+  const details = `${error.message} ${error.details ?? ''} ${error.hint ?? ''}`.toLowerCase();
+  const missingRelation =
+    details.includes('relation') && details.includes('does not exist');
+  const missingTable =
+    details.includes('could not find the table') ||
+    details.includes('table') && details.includes('not found');
+
+  if (missingRelation || missingTable) {
+    return false;
+  }
+
+  // For permission/RLS errors the table still exists, so keep it eligible.
+  return true;
 }
 
 export async function resolveTableNameForKey(key: string): Promise<string | null> {
@@ -124,17 +141,16 @@ export async function fetchCollectionFromSupabase<T>(key: string): Promise<T[] |
 }
 
 export async function bootstrapSupabaseCollectionsToLocalStorage(keys: string[]): Promise<boolean> {
-  let loadedAny = false;
+  const results = await Promise.all(
+    keys.map(async (key) => {
+      const remote = await fetchCollectionFromSupabase<unknown>(key);
+      if (!remote) return false;
+      localStorage.setItem(key, JSON.stringify(remote));
+      return true;
+    })
+  );
 
-  for (const key of keys) {
-    const remote = await fetchCollectionFromSupabase<unknown>(key);
-    if (!remote) continue;
-
-    localStorage.setItem(key, JSON.stringify(remote));
-    loadedAny = true;
-  }
-
-  return loadedAny;
+  return results.some(Boolean);
 }
 
 export async function syncCollectionDiffToSupabase<T>(

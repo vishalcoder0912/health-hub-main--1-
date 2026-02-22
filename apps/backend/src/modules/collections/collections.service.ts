@@ -3,7 +3,11 @@ import { StatusCodes } from "http-status-codes";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/db.js";
 import { ApiError } from "../../common/utils/api-error.js";
-import { upsertSupabaseCollectionValue } from "../../integrations/supabase-sync.js";
+import {
+  getSupabaseCollectionValue,
+  isSupabaseSyncEnabled,
+  upsertSupabaseCollectionValue
+} from "../../integrations/supabase-sync.js";
 import { defaultCollectionKeys, defaultCollections } from "./collections.defaults.js";
 
 type CollectionItem = Record<string, unknown> & { id: string };
@@ -63,6 +67,22 @@ async function getOrCreateCollectionRow(key: string) {
 }
 
 export async function bootstrapCollections() {
+  if (isSupabaseSyncEnabled()) {
+    let syncedAny = false;
+    const mapped: Record<string, unknown> = {};
+
+    for (const key of defaultCollectionKeys) {
+      const synced = await upsertSupabaseCollectionValue(key, defaultCollections[key]);
+      syncedAny = syncedAny || synced;
+      const remoteValue = await getSupabaseCollectionValue(key);
+      mapped[key] = remoteValue ?? defaultCollections[key];
+    }
+
+    if (syncedAny) {
+      return mapped;
+    }
+  }
+
   for (const key of defaultCollectionKeys) {
     await prisma.dataCollection.upsert({
       where: { key },
@@ -81,12 +101,31 @@ export async function bootstrapCollections() {
 }
 
 export async function getCollection(key: string) {
+  if (isSupabaseSyncEnabled()) {
+    const remoteValue = await getSupabaseCollectionValue(key);
+    if (remoteValue !== null) {
+      return normalizeCollectionValue(remoteValue);
+    }
+
+    const created = await upsertSupabaseCollectionValue(key, []);
+    if (created) {
+      return [];
+    }
+  }
+
   const existing = await getOrCreateCollectionRow(key);
   return normalizeCollectionValue(existing.items);
 }
 
 export async function setCollection(key: string, items: unknown) {
   const normalized = normalizeCollectionValue(items);
+
+  if (isSupabaseSyncEnabled()) {
+    const saved = await upsertSupabaseCollectionValue(key, normalized);
+    if (saved) {
+      return normalized;
+    }
+  }
 
   const updated = await prisma.dataCollection.upsert({
     where: { key },

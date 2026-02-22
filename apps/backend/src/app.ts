@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
@@ -47,5 +49,21 @@ app.use(
 );
 
 app.use("/api/v1", apiRouter);
+
+const frontendDistPath = path.resolve(process.cwd(), "../frontend/dist");
+const frontendIndexPath = path.join(frontendDistPath, "index.html");
+const hasFrontendBuild = fs.existsSync(frontendIndexPath);
+
+if (hasFrontendBuild) {
+  app.use(express.static(frontendDistPath));
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api/")) {
+      next();
+      return;
+    }
+    res.sendFile(frontendIndexPath);
+  });
+}
+
 app.use(notFoundHandler);
 app.use(errorHandler);

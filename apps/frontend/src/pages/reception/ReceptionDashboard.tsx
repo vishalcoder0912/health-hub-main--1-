@@ -13,8 +13,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useLocalStorage } from '@/hooks/useLocalStorage';
-import { getData, mockAppointments, mockPatients, mockDepartments } from '@/lib/mockData';
+import { usePatients, useAppointmentsWithDetails, useDepartments } from '@/hooks/useMedicareData';
+import { mapPatientRowToPatient } from '@/lib/supabase/mappers';
 import { Appointment, Patient } from '@/types';
 import { toast } from 'sonner';
  import { StaffCheckIn } from './StaffCheckIn';
@@ -45,17 +45,20 @@ const navItems = [
 function ReceptionOverview() {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
-  const appointments = getData('appointments', mockAppointments);
-  const patients = getData('patients', mockPatients);
-  const departments = getData('departments', mockDepartments);
-
-  const todayAppointments = appointments.filter(a => a.date === '2024-03-15');
+  const { data: appointmentsWithDetails } = useAppointmentsWithDetails();
+  const { data: patientsRows } = usePatients();
+  const { data: departments } = useDepartments();
+  const patients = (patientsRows ?? []).map(mapPatientRowToPatient);
+  const today = new Date().toISOString().slice(0, 10);
+  const todayAppointments = (appointmentsWithDetails ?? []).filter(
+    a => new Date(a.appointment_date).toISOString().slice(0, 10) === today
+  );
   const waitingPatients = todayAppointments.filter(a => a.status === 'scheduled').length;
-  const currentToken = todayAppointments.find(a => a.status === 'in-progress')?.tokenNumber || 0;
+  const currentToken = 0;
 
   const filteredPatients = patients.filter(p =>
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.phone.includes(searchQuery) ||
+    (p.phone && p.phone.includes(searchQuery)) ||
     p.email.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -84,7 +87,7 @@ function ReceptionOverview() {
         <StatsCard
           title="Total Patients"
           value={patients.length}
-          description="Registered"
+          description="Registered (Supabase)"
           icon={Users}
         />
       </div>
@@ -212,13 +215,17 @@ function ReceptionOverview() {
   );
 }
 
+const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'] as const;
+
 function PatientRegistration() {
-  const { data: patients, addItem, updateItem, deleteItem } = useLocalStorage<Patient>('patients', mockPatients);
+  const { data: patientsRows, create, update, remove, isLoading } = usePatients();
+  const patients = (patientsRows ?? []).map(mapPatientRowToPatient);
   const [searchQuery, setSearchQuery] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null);
   const [deletePatientId, setDeletePatientId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -233,7 +240,7 @@ function PatientRegistration() {
 
   const filteredPatients = patients.filter(p =>
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.phone.includes(searchQuery)
+    (p.phone && p.phone.includes(searchQuery))
   );
 
   const columns: Column<Patient>[] = [

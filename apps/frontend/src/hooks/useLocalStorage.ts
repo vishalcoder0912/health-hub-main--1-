@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import { fetchCollection, replaceCollection } from "@/services/collections.service";
+import { subscribeCollectionChanges } from "@/lib/supabaseSync";
 import { supabase } from "@/utils/supabase";
 
 type WithId = { id?: string };
@@ -46,6 +47,8 @@ export function useLocalStorage<T extends WithId>(key: string, initialValue: T[]
   const dataRef = useRef<T[]>(data);
   const mutationVersionRef = useRef(0);
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rollbackSnapshotRef = useRef<T[] | null>(null);
 
   const applyLocalData = useCallback(
     (next: T[]) => {
@@ -66,7 +69,7 @@ export function useLocalStorage<T extends WithId>(key: string, initialValue: T[]
 
   useEffect(() => {
     initialValueRef.current = initialValue;
-  }, [key]);
+  }, [initialValue]);
 
   const refreshFromBackend = useCallback(async () => {
     const remote = await fetchCollection<T>(key);
@@ -84,28 +87,42 @@ export function useLocalStorage<T extends WithId>(key: string, initialValue: T[]
     (next: T[], previous: T[]) => {
       const nextDeduped = dedupeById(next);
       const previousDeduped = dedupeById(previous);
-      const version = ++mutationVersionRef.current;
 
       applyLocalData(nextDeduped);
       setError(null);
 
-      void (async () => {
-        try {
-          const saved = await replaceCollection<T>(key, nextDeduped);
-          if (version !== mutationVersionRef.current) return;
-          applyLocalData(saved);
-        } catch (commitError) {
-          if (version !== mutationVersionRef.current) return;
-          applyLocalData(previousDeduped);
-          setError(toMessage(commitError, `Failed to save ${key}`));
-        }
-      })();
+      if (!rollbackSnapshotRef.current) {
+        rollbackSnapshotRef.current = previousDeduped;
+      }
+
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+      }
+
+      saveTimerRef.current = setTimeout(() => {
+        const version = ++mutationVersionRef.current;
+        const rollback = rollbackSnapshotRef.current ?? previousDeduped;
+        rollbackSnapshotRef.current = null;
+
+        void (async () => {
+          try {
+            const saved = await replaceCollection<T>(key, dataRef.current);
+            if (version !== mutationVersionRef.current) return;
+            applyLocalData(saved);
+          } catch (commitError) {
+            if (version !== mutationVersionRef.current) return;
+            applyLocalData(rollback);
+            setError(toMessage(commitError, `Failed to save ${key}`));
+          }
+        })();
+      }, 250);
     },
     [applyLocalData, key]
   );
 
   useEffect(() => {
     let mounted = true;
+    let unsubscribeMappedTable: (() => void) | null = null;
 
     void (async () => {
       try {
@@ -124,6 +141,12 @@ export function useLocalStorage<T extends WithId>(key: string, initialValue: T[]
           setIsLoading(false);
         }
       }
+    })();
+
+    void (async () => {
+      unsubscribeMappedTable = await subscribeCollectionChanges(key, () => {
+        void refreshFromBackend();
+      });
     })();
 
     const channel = supabase
@@ -152,9 +175,16 @@ export function useLocalStorage<T extends WithId>(key: string, initialValue: T[]
 
     return () => {
       mounted = false;
+      if (unsubscribeMappedTable) {
+        unsubscribeMappedTable();
+      }
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
         channelRef.current = null;
+      }
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
       }
     };
   }, [applyLocalData, key, refreshFromBackend]);

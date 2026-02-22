@@ -3,7 +3,7 @@ import { Session, User as SupabaseUser } from "@supabase/supabase-js";
 import { User, UserRole } from "@/types";
 import { supabase } from "@/utils/supabase";
 import { bootstrapCollectionsToLocalStorage } from "@/lib/backendSync";
-import { apiRequest, clearAuthTokens, setAuthTokens } from "@/lib/api";
+import { apiRequest, clearAuthTokens, getAccessToken, setAuthTokens } from "@/lib/api";
 
 type AuthResult =
   | {
@@ -65,19 +65,52 @@ const allowedRoles: UserRole[] = [
   "bloodbank"
 ];
 
-function parseRole(supabaseUser: SupabaseUser | null, fallbackRole?: UserRole): UserRole | null {
-  const rawRole =
-    (supabaseUser?.user_metadata?.role as string | undefined) ||
-    (supabaseUser?.app_metadata?.role as string | undefined) ||
-    fallbackRole ||
-    null;
+const roleAliasMap: Record<string, UserRole> = {
+  admin: "admin",
+  doctor: "doctor",
+  reception: "receptionist",
+  receptionist: "receptionist",
+  nurse: "nurse",
+  pharmacy: "pharmacy",
+  lab: "laboratory",
+  laboratory: "laboratory",
+  billing: "billing",
+  patient: "patient",
+  bloodbank: "bloodbank",
+  blood_bank: "bloodbank"
+};
 
+function normalizeRole(rawRole?: string | null): UserRole | null {
   if (!rawRole) return null;
-  return allowedRoles.includes(rawRole as UserRole) ? (rawRole as UserRole) : null;
+  return roleAliasMap[rawRole.toLowerCase().trim()] ?? null;
+}
+
+function parseRole(supabaseUser: SupabaseUser | null, fallbackRole?: UserRole): UserRole | null {
+  const metadataRole = normalizeRole(supabaseUser?.user_metadata?.role as string | undefined);
+  if (metadataRole && allowedRoles.includes(metadataRole)) return metadataRole;
+
+  const appMetadataRole = normalizeRole(supabaseUser?.app_metadata?.role as string | undefined);
+  if (appMetadataRole && allowedRoles.includes(appMetadataRole)) return appMetadataRole;
+
+  const fallback = normalizeRole(fallbackRole);
+  if (fallback && allowedRoles.includes(fallback)) return fallback;
+
+  return null;
+}
+
+function readStoredUser(): User | null {
+  try {
+    const raw = localStorage.getItem("currentUser");
+    if (!raw) return null;
+    return JSON.parse(raw) as User;
+  } catch {
+    return null;
+  }
 }
 
 function mapCombinedUser(backendUser: BackendUser, supabaseUser: SupabaseUser | null): User {
   const parsedRole = parseRole(supabaseUser, backendUser.role);
+  const stored = readStoredUser();
 
   return {
     id: backendUser.id,
@@ -86,24 +119,27 @@ function mapCombinedUser(backendUser: BackendUser, supabaseUser: SupabaseUser | 
       backendUser.fullName ||
       (supabaseUser?.user_metadata?.full_name as string | undefined) ||
       (supabaseUser?.user_metadata?.name as string | undefined) ||
+      stored?.name ||
       backendUser.email.split("@")[0] ||
       "User",
     role: parsedRole ?? backendUser.role,
-    phone: backendUser.phone ?? undefined,
-    department: backendUser.department ?? undefined,
-    specialization: backendUser.specialization ?? undefined,
-    avatar: (supabaseUser?.user_metadata?.avatar as string | undefined) ?? undefined,
+    phone: backendUser.phone ?? stored?.phone ?? undefined,
+    department: backendUser.department ?? stored?.department ?? undefined,
+    specialization: backendUser.specialization ?? stored?.specialization ?? undefined,
+    avatar: (supabaseUser?.user_metadata?.avatar as string | undefined) ?? stored?.avatar ?? undefined,
     createdAt: backendUser.createdAt
   };
 }
 
 function mapSupabaseUserOnly(supabaseUser: SupabaseUser, fallbackRole?: UserRole): User | null {
+  const stored = readStoredUser();
   const role = parseRole(supabaseUser, fallbackRole);
   if (!role) return null;
 
   const name =
     (supabaseUser.user_metadata?.full_name as string | undefined) ||
     (supabaseUser.user_metadata?.name as string | undefined) ||
+    stored?.name ||
     supabaseUser.email?.split("@")[0] ||
     "User";
 
@@ -112,10 +148,14 @@ function mapSupabaseUserOnly(supabaseUser: SupabaseUser, fallbackRole?: UserRole
     email: supabaseUser.email ?? "",
     name,
     role,
-    phone: (supabaseUser.user_metadata?.phone as string | undefined) ?? undefined,
-    department: (supabaseUser.user_metadata?.department as string | undefined) ?? undefined,
-    specialization: (supabaseUser.user_metadata?.specialization as string | undefined) ?? undefined,
-    avatar: (supabaseUser.user_metadata?.avatar as string | undefined) ?? undefined,
+    phone: (supabaseUser.user_metadata?.phone as string | undefined) ?? stored?.phone ?? undefined,
+    department:
+      (supabaseUser.user_metadata?.department as string | undefined) ?? stored?.department ?? undefined,
+    specialization:
+      (supabaseUser.user_metadata?.specialization as string | undefined) ??
+      stored?.specialization ??
+      undefined,
+    avatar: (supabaseUser.user_metadata?.avatar as string | undefined) ?? stored?.avatar ?? undefined,
     createdAt: supabaseUser.created_at ?? new Date().toISOString()
   };
 }
@@ -125,11 +165,44 @@ async function hydrateCollections(): Promise<void> {
 }
 
 async function fetchBackendProfile(supabaseUser: SupabaseUser | null): Promise<User> {
+  const accessToken = getAccessToken();
+  if (!accessToken) {
+    throw new Error("BACKEND_TOKEN_MISSING");
+  }
+
   const profile = await apiRequest<BackendUser>("/users/me");
   const mapped = mapCombinedUser(profile, supabaseUser);
   localStorage.setItem("currentUser", JSON.stringify(mapped));
   localStorage.setItem("backendUser", JSON.stringify(profile));
   return mapped;
+}
+
+function shouldLogProfileFallback(error: unknown): boolean {
+  if (!(error instanceof Error)) return true;
+  return error.message !== "BACKEND_TOKEN_MISSING";
+}
+
+async function resolveRoleFallback(supabaseUser: SupabaseUser): Promise<UserRole | undefined> {
+  const storedRole = readStoredUser()?.role;
+  if (storedRole) return storedRole;
+
+  const parsed = parseRole(supabaseUser);
+  if (parsed) return parsed;
+
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("role")
+      .eq("id", supabaseUser.id)
+      .maybeSingle();
+
+    if (error) return undefined;
+
+    const role = normalizeRole((data as { role?: string } | null)?.role);
+    return role ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -166,16 +239,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(mapped);
           await hydrateCollections();
         } catch (profileError) {
-          const fallback = mapSupabaseUserOnly(data.session.user);
+          const fallbackRole = await resolveRoleFallback(data.session.user);
+          const fallback = mapSupabaseUserOnly(data.session.user, fallbackRole);
           setUser(fallback);
           if (fallback) {
             localStorage.setItem("currentUser", JSON.stringify(fallback));
             await hydrateCollections();
           }
-          console.error(
-            "[AuthContext:profileFallback]",
-            profileError instanceof Error ? profileError.message : String(profileError)
-          );
+          if (shouldLogProfileFallback(profileError)) {
+            console.error(
+              "[AuthContext:profileFallback]",
+              profileError instanceof Error ? profileError.message : String(profileError)
+            );
+          }
         }
       } finally {
         if (active) setIsLoading(false);
@@ -201,16 +277,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(mapped);
         await hydrateCollections();
       } catch (profileError) {
-        const fallback = mapSupabaseUserOnly(nextSession.user);
+        const fallbackRole = await resolveRoleFallback(nextSession.user);
+        const fallback = mapSupabaseUserOnly(nextSession.user, fallbackRole);
         setUser(fallback);
         if (fallback) {
           localStorage.setItem("currentUser", JSON.stringify(fallback));
           await hydrateCollections();
         }
-        console.error(
-          "[AuthContext:onAuthStateChange]",
-          profileError instanceof Error ? profileError.message : String(profileError)
-        );
+        if (shouldLogProfileFallback(profileError)) {
+          console.error(
+            "[AuthContext:onAuthStateChange]",
+            profileError instanceof Error ? profileError.message : String(profileError)
+          );
+        }
       } finally {
         setIsLoading(false);
       }

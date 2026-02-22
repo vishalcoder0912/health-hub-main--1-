@@ -23,7 +23,18 @@ import BillingDashboard from "./pages/billing/BillingDashboard";
 import PatientDashboard from "./pages/patient/PatientDashboard";
 import BloodBankDashboard from "./pages/bloodbank/BloodBankDashboard";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+    mutations: {
+      retry: 1,
+    },
+  },
+});
 
 // Redirect component for the index route
 function IndexRedirect() {

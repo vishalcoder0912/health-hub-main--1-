@@ -5,7 +5,7 @@
   "description": "Monorepo workspace scripts for Health Hub frontend and backend",
   "scripts": {
     "install:all": "npm --prefix ./apps/frontend install && npm --prefix ./apps/backend install",
-    "dev": "npm run dev:frontend",
+    "dev": "npm run dev:all",
     "dev:frontend": "cd ./apps/frontend && npm run dev",
     "dev:backend": "cd ./apps/backend && npm run dev",
     "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
@@ -17,6 +17,7 @@
     "lint:backend": "cd ./apps/backend && npm run lint",
     "test": "npm run test:frontend",
     "test:frontend": "cd ./apps/frontend && npm run test",
+    "start": "npm run build && npm run start:backend",
     "start:backend": "cd ./apps/backend && npm run start"
   },
   "devDependencies": {

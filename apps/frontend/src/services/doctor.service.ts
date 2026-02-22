@@ -336,6 +336,10 @@ export function subscribeDoctorPortal(doctorId: string | undefined, onChange: ()
     .channel(`doctor-portal-${doctorId ?? "all"}`)
     .on("postgres_changes", { event: "*", schema: "public", table: "appointments" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "Appointment" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "lab_tests" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "lab_reports" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "prescriptions" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "medical_records" }, onChange)
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "data_collections", filter: "key=eq.labTests" },

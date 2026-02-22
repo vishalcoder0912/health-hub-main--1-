@@ -97,6 +97,8 @@ export async function fetchPatientsForBilling(): Promise<PatientOption[]> {
 export function subscribeBills(callback: () => void): () => void {
   const channel: RealtimeChannel = supabase
     .channel(`billing-bills-changes-${Math.random().toString(36).slice(2)}`)
+    .on("postgres_changes", { event: "*", schema: "public", table: "bills" }, callback)
+    .on("postgres_changes", { event: "*", schema: "public", table: "invoices" }, callback)
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "data_collections", filter: "key=eq.bills" },

@@ -120,3 +120,33 @@ export async function upsertSupabaseCollectionValue(
     "key"
   );
 }
+
+type SupabaseCollectionRow = {
+  key: string;
+  items: unknown;
+};
+
+export async function getSupabaseCollectionValue(key: string): Promise<unknown | null> {
+  if (!canSync) {
+    return null;
+  }
+
+  const query = `/rest/v1/data_collections?key=eq.${encodeURIComponent(
+    key
+  )}&select=key,items&limit=1`;
+  const result = await request(
+    query,
+    {
+      method: "GET",
+      headers: getHeaders()
+    },
+    `select:data_collections:${key}`
+  );
+
+  if (!result.ok || !Array.isArray(result.data) || result.data.length === 0) {
+    return null;
+  }
+
+  const row = result.data[0] as SupabaseCollectionRow;
+  return row.items ?? null;
+}
