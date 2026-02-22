@@ -1,61 +1,73 @@
-# Medicare HMS Workspace
+# Health Hub Monorepo
 
-This root folder contains workspace-level scripts for the full Medicare HMS project.
+This repository is organized as a simple monorepo with separate frontend and backend apps.
 
-## Structure
-- `health-hub-main/` -> Frontend (React + Vite + TypeScript + Supabase)
-- `health-hub-main/backend/` -> Backend API (Node + Express + Prisma)
+## Folder Structure
+- `apps/frontend` -> React + Vite + TypeScript frontend
+- `apps/backend` -> Node.js + Express + Prisma backend
+- `docs` -> Product and implementation documentation
 
 ## One-Time Setup
-From this root folder:
+From the repository root:
 
 ```powershell
 npm install
 npm run install:all
 ```
 
-## Run Project
+## Development
 
-### Frontend only
+Frontend:
+
 ```powershell
 npm run dev
 ```
-Frontend URL: `http://localhost:8080`
 
-### Backend only
+Backend:
+
 ```powershell
 npm run dev:backend
 ```
-Backend URL: `http://localhost:4000/api/v1`
 
-### Frontend + Backend together
+Frontend + backend:
+
 ```powershell
 npm run dev:all
 ```
 
-## Build
+## Validation
+Build all apps:
+
 ```powershell
 npm run build
 ```
 
-## Supabase Configuration
-Frontend env file: `health-hub-main/.env`
+Lint all apps:
 
-Required keys:
-
-```env
-VITE_SUPABASE_URL=your_supabase_project_url
-VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY=your_supabase_publishable_key
-VITE_API_URL=http://localhost:4000/api/v1
+```powershell
+npm run lint
 ```
 
-## CORS Configuration
-Backend env file: `health-hub-main/backend/.env`
+Run frontend tests:
 
-Use:
+```powershell
+npm run test
+```
+
+## Environment Files
+- Frontend env: `apps/frontend/.env`
+- Backend env: `apps/backend/.env`
+
+Frontend required values:
+
+```env
+VITE_API_URL=http://localhost:4000/api/v1
+VITE_SUPABASE_URL=your_supabase_project_url
+VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY=your_supabase_publishable_key
+```
+
+Backend example CORS value:
 
 ```env
 CORS_ORIGIN=http://localhost:8080,http://localhost:5173
 ```
-
-This allows local frontend access on either common Vite port.

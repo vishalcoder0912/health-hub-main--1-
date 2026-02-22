@@ -2,18 +2,22 @@
   "name": "medicare-hms-workspace",
   "version": "1.0.0",
   "private": true,
-  "description": "Workspace scripts for Medicare HMS frontend and backend",
+  "description": "Monorepo workspace scripts for Health Hub frontend and backend",
   "scripts": {
-    "install:all": "npm --prefix health-hub-main install && npm --prefix health-hub-main/backend install",
+    "install:all": "npm --prefix ./apps/frontend install && npm --prefix ./apps/backend install",
     "dev": "npm run dev:frontend",
-    "dev:frontend": "npm --prefix health-hub-main run dev",
-    "dev:backend": "npm --prefix health-hub-main/backend run dev",
+    "dev:frontend": "cd ./apps/frontend && npm run dev",
+    "dev:backend": "cd ./apps/backend && npm run dev",
     "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "build": "npm run build:frontend && npm run build:backend",
-    "build:frontend": "npm --prefix health-hub-main run build",
-    "build:backend": "npm --prefix health-hub-main/backend run build",
-    "lint:frontend": "npm --prefix health-hub-main run lint",
-    "start:backend": "npm --prefix health-hub-main/backend run start"
+    "build:frontend": "cd ./apps/frontend && npm run build",
+    "build:backend": "cd ./apps/backend && npm run build",
+    "lint": "npm run lint:frontend && npm run lint:backend",
+    "lint:frontend": "cd ./apps/frontend && npm run lint",
+    "lint:backend": "cd ./apps/backend && npm run lint",
+    "test": "npm run test:frontend",
+    "test:frontend": "cd ./apps/frontend && npm run test",
+    "start:backend": "cd ./apps/backend && npm run start"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
