@@ -2,6 +2,8 @@ import { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '@/utils/supabase';
 import { getAll } from '@/services/base.service';
 
+type IdRecord = Record<string, unknown> & { id?: string };
+
 export const keyToTableMap: Record<string, string[]> = {
   users: ['users'],
   patients: ['patients'],
@@ -36,71 +38,69 @@ export const keyToTableMap: Record<string, string[]> = {
 
 const resolvedTableCache = new Map<string, string | null>();
 
-type IdRecord = Record<string, unknown> & { id?: string };
-
-function normalizeError(context: string, error: unknown): void {
-  if (error instanceof Error) {
-    console.error(`[SupabaseSync:${context}] ${error.message}`);
-    return;
-  }
-  console.error(`[SupabaseSync:${context}] Unknown error`);
-}
-
-async function tableExists(tableName: string): Promise<boolean> {
-  const { error } = await supabase.from(tableName).select('*', { count: 'exact', head: true });
-  return !error;
+function logError(context: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : 'Unknown error';
+  console.error(`[SupabaseSync:${context}] ${message}`);
 }
 
 function getSyntheticId(key: string, item: Record<string, unknown>): string | null {
   if (key === 'staffAttendance') {
-    const staffId = typeof item.oddbodyId === 'string' ? item.oddbodyId : null;
+    const staffId = typeof item.staffId === 'string' ? item.staffId : typeof item.oddbodyId === 'string' ? item.oddbodyId : null;
     const date = typeof item.date === 'string' ? item.date : null;
     if (staffId && date) return `${staffId}_${date}`;
   }
   return null;
 }
 
-function normalizeWithId<T>(key: string, items: T[]): Array<T & { id: string }> | null {
+function normalizeItemsWithId<T>(key: string, items: T[]): Array<T & { id: string }> | null {
   const normalized: Array<T & { id: string }> = [];
-  for (const raw of items) {
-    const value = raw as Record<string, unknown>;
-    if (typeof value.id === 'string') {
-      normalized.push(raw as T & { id: string });
+
+  for (const item of items) {
+    const value = item as Record<string, unknown>;
+    if (typeof value.id === 'string' && value.id) {
+      normalized.push(item as T & { id: string });
       continue;
     }
 
     const syntheticId = getSyntheticId(key, value);
     if (!syntheticId) return null;
-    normalized.push({ ...(raw as object), id: syntheticId } as T & { id: string });
+
+    normalized.push({ ...(item as object), id: syntheticId } as T & { id: string });
   }
+
   return normalized;
 }
 
-function dedupeById<T extends IdRecord>(rows: T[]): T[] {
+function dedupeById<T extends IdRecord>(items: T[]): T[] {
   const map = new Map<string, T>();
-  const result: T[] = [];
+  const withoutId: T[] = [];
 
-  for (const row of rows) {
-    if (!row.id) {
-      result.push(row);
+  for (const item of items) {
+    if (!item.id) {
+      withoutId.push(item);
       continue;
     }
-    if (!map.has(row.id)) {
-      map.set(row.id, row);
-      result.push(row);
-    }
+    map.set(item.id, item);
   }
-  return result;
+
+  return [...withoutId, ...Array.from(map.values())];
+}
+
+async function tableExists(tableName: string): Promise<boolean> {
+  const { error } = await supabase.from(tableName).select('*', { head: true, count: 'exact' });
+  return !error;
 }
 
 export async function resolveTableNameForKey(key: string): Promise<string | null> {
-  if (resolvedTableCache.has(key)) return resolvedTableCache.get(key) ?? null;
+  if (resolvedTableCache.has(key)) {
+    return resolvedTableCache.get(key) ?? null;
+  }
 
   const candidates = keyToTableMap[key] ?? [key];
-  for (const tableName of candidates) {
-    if (await tableExists(tableName)) {
-      resolvedTableCache.set(key, tableName);
-      return tableName;
+  for (const table of candidates) {
+    if (await tableExists(table)) {
+      resolvedTableCache.set(key, table);
+      return table;
     }
   }
 
@@ -113,23 +113,27 @@ export async function fetchCollectionFromSupabase<T>(key: string): Promise<T[] |
     const tableName = await resolveTableNameForKey(key);
     if (!tableName) return null;
 
-    const result = await getAll<T & IdRecord>(tableName);
-    if (result.error || !result.data) return null;
-    return dedupeById(result.data) as T[];
+    const response = await getAll<T & IdRecord>(tableName);
+    if (response.error || !response.data) return null;
+
+    return dedupeById(response.data) as T[];
   } catch (error) {
-    normalizeError(`fetch:${key}`, error);
+    logError(`fetch:${key}`, error);
     return null;
   }
 }
 
 export async function bootstrapSupabaseCollectionsToLocalStorage(keys: string[]): Promise<boolean> {
   let loadedAny = false;
+
   for (const key of keys) {
-    const data = await fetchCollectionFromSupabase<unknown>(key);
-    if (!data) continue;
-    localStorage.setItem(key, JSON.stringify(data));
+    const remote = await fetchCollectionFromSupabase<unknown>(key);
+    if (!remote) continue;
+
+    localStorage.setItem(key, JSON.stringify(remote));
     loadedAny = true;
   }
+
   return loadedAny;
 }
 
@@ -142,8 +146,8 @@ export async function syncCollectionDiffToSupabase<T>(
     const tableName = await resolveTableNameForKey(key);
     if (!tableName) return;
 
-    const prev = normalizeWithId(key, previousItems);
-    const next = normalizeWithId(key, nextItems);
+    const prev = normalizeItemsWithId(key, previousItems);
+    const next = normalizeItemsWithId(key, nextItems);
     if (!prev || !next) return;
 
     const prevById = new Map(prev.map((item) => [item.id, item]));
@@ -162,36 +166,36 @@ export async function syncCollectionDiffToSupabase<T>(
     if (upserts.length > 0) {
       const { error } = await supabase.from(tableName).upsert(upserts, { onConflict: 'id' });
       if (error) {
-        console.error(`[SupabaseSync:upsert:${key}] ${error.message}`);
+        logError(`upsert:${key}`, error);
       }
     }
 
     if (deletedIds.length > 0) {
       const { error } = await supabase.from(tableName).delete().in('id', deletedIds);
       if (error) {
-        console.error(`[SupabaseSync:delete:${key}] ${error.message}`);
+        logError(`delete:${key}`, error);
       }
     }
   } catch (error) {
-    normalizeError(`sync:${key}`, error);
+    logError(`sync:${key}`, error);
   }
 }
 
 export async function subscribeCollectionChanges(
   key: string,
-  onChange: () => void
+  onChange: (event: 'INSERT' | 'UPDATE' | 'DELETE') => void
 ): Promise<(() => void) | null> {
   const tableName = await resolveTableNameForKey(key);
   if (!tableName) return null;
 
   const channel: RealtimeChannel = supabase
     .channel(`sync:${tableName}:${Math.random().toString(36).slice(2)}`)
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: tableName }, onChange)
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: tableName }, onChange)
-    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: tableName }, onChange)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: tableName }, () => onChange('INSERT'))
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: tableName }, () => onChange('UPDATE'))
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: tableName }, () => onChange('DELETE'))
     .subscribe((status) => {
       if (status === 'CHANNEL_ERROR') {
-        console.error(`[SupabaseSync:realtime:${key}] Channel error`);
+        console.error(`[SupabaseSync:realtime:${tableName}] Channel error`);
       }
     });
 
@@ -204,14 +208,23 @@ export async function subscribeMappedTables(
   keys: string[],
   onChange: (key: string) => void
 ): Promise<() => void> {
-  const unsubs: Array<() => void> = [];
+  const unsubscribers: Array<() => void> = [];
+
   await Promise.all(
     keys.map(async (key) => {
-      const unsub = await subscribeCollectionChanges(key, () => onChange(key));
-      if (unsub) unsubs.push(unsub);
+      const unsubscribe = await subscribeCollectionChanges(key, () => {
+        onChange(key);
+      });
+
+      if (unsubscribe) {
+        unsubscribers.push(unsubscribe);
+      }
     })
   );
+
   return () => {
-    unsubs.forEach((fn) => fn());
+    for (const unsubscribe of unsubscribers) {
+      unsubscribe();
+    }
   };
 }

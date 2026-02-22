@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DataTable, Column } from '@/components/crud/DataTable';
 import { DeleteDialog } from '@/components/crud/DeleteDialog';
 import { Button } from '@/components/ui/button';
@@ -8,20 +8,31 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { useLocalStorage } from '@/hooks/useLocalStorage';
-import { mockLabTests, mockPatients } from '@/lib/mockData';
 import { LabTest } from '@/types';
 import { toast } from 'sonner';
 import { StatusBadge } from '@/components/StatusBadge';
+import { useAuth } from '@/contexts/AuthContext';
+import {
+  createDoctorLabTest,
+  deleteDoctorLabTest,
+  fetchDoctorLabTests,
+  fetchPatientOptions,
+  subscribeDoctorPortal,
+  updateDoctorLabTest,
+} from '@/services/doctor.service';
 
 export function DoctorLabTests() {
-  const { data: labTests, addItem, updateItem, deleteItem } = useLocalStorage<LabTest>('labTests', mockLabTests);
-  const patients = mockPatients;
+  const { user } = useAuth();
+  const [labTests, setLabTests] = useState<LabTest[]>([]);
+  const [patients, setPatients] = useState<Array<{ id: string; name: string }>>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [editingTest, setEditingTest] = useState<LabTest | null>(null);
   const [deleteTestId, setDeleteTestId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     patientId: '',
@@ -31,23 +42,66 @@ export function DoctorLabTests() {
     notes: '',
   });
 
-  const filteredTests = labTests.filter(t =>
-    t.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    t.testName.toLowerCase().includes(searchQuery.toLowerCase())
+  const testTypes = ['Hematology', 'Biochemistry', 'Radiology', 'Microbiology', 'Immunology'];
+
+  const loadData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const [tests, patientRows] = await Promise.all([
+        fetchDoctorLabTests(user?.id),
+        fetchPatientOptions(),
+      ]);
+
+      setLabTests(tests);
+      setPatients(patientRows);
+    } catch (loadError) {
+      const message = loadError instanceof Error ? loadError.message : 'Failed to load lab tests';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    void loadData();
+    const unsubscribe = subscribeDoctorPortal(user?.id, () => {
+      void loadData();
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [loadData, user?.id]);
+
+  const filteredTests = useMemo(
+    () =>
+      labTests.filter(
+        (test) =>
+          test.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          test.testName.toLowerCase().includes(searchQuery.toLowerCase())
+      ),
+    [labTests, searchQuery]
   );
 
   const columns: Column<LabTest>[] = [
-    { key: 'id', header: 'Test ID', render: (t) => <Badge variant="outline">{t.id.toUpperCase()}</Badge> },
-    { key: 'patientName', header: 'Patient', render: (t) => <span className="font-medium">{t.patientName}</span> },
+    { key: 'id', header: 'Test ID', render: (test) => <Badge variant="outline">{test.id.toUpperCase()}</Badge> },
+    { key: 'patientName', header: 'Patient', render: (test) => <span className="font-medium">{test.patientName}</span> },
     { key: 'testName', header: 'Test Name' },
-    { key: 'testType', header: 'Type', render: (t) => <Badge variant="secondary">{t.testType}</Badge> },
-    { key: 'requestDate', header: 'Date', render: (t) => new Date(t.requestDate).toLocaleDateString() },
-    { key: 'status', header: 'Status', render: (t) => <StatusBadge status={t.status} /> },
+    { key: 'testType', header: 'Type', render: (test) => <Badge variant="secondary">{test.testType}</Badge> },
+    { key: 'requestDate', header: 'Date', render: (test) => new Date(test.requestDate).toLocaleDateString() },
+    { key: 'status', header: 'Status', render: (test) => <StatusBadge status={test.status} /> },
   ];
 
-  const handleAdd = () => {
+  const resetForm = () => {
     setEditingTest(null);
     setFormData({ patientId: '', testName: '', testType: '', status: 'requested', notes: '' });
+  };
+
+  const handleAdd = () => {
+    resetForm();
     setIsFormOpen(true);
   };
 
@@ -68,57 +122,89 @@ export function DoctorLabTests() {
     setIsDeleteOpen(true);
   };
 
-  const confirmDelete = () => {
-    if (deleteTestId) {
-      deleteItem(deleteTestId);
+  const confirmDelete = async () => {
+    if (!deleteTestId) return;
+
+    try {
+      await deleteDoctorLabTest(deleteTestId);
       toast.success('Lab test deleted successfully');
       setIsDeleteOpen(false);
       setDeleteTestId(null);
+      await loadData();
+    } catch (deleteError) {
+      toast.error(deleteError instanceof Error ? deleteError.message : 'Failed to delete lab test');
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const patient = patients.find(p => p.id === formData.patientId);
-    if (editingTest) {
-      updateItem(editingTest.id, formData);
-      toast.success('Lab test updated successfully');
-    } else {
-      const newTest: LabTest = {
-        id: `lab-${Date.now()}`,
-        patientId: formData.patientId,
-        patientName: patient?.name || '',
-        doctorId: 'doctor-1',
-        doctorName: 'Dr. Michael Chen',
-        testName: formData.testName,
-        testType: formData.testType,
-        status: 'requested',
-        requestDate: new Date().toISOString().split('T')[0],
-        cost: 100,
-      };
-      addItem(newTest);
-      toast.success('Lab test requested successfully');
-    }
-    setIsFormOpen(false);
-  };
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
 
-  const testTypes = ['Hematology', 'Biochemistry', 'Radiology', 'Microbiology', 'Immunology'];
+    const patient = patients.find((item) => item.id === formData.patientId);
+    if (!patient) {
+      toast.error('Please select a patient');
+      return;
+    }
+
+    const payload: Omit<LabTest, 'id'> = {
+      patientId: patient.id,
+      patientName: patient.name,
+      doctorId: user?.id || '',
+      doctorName: user?.name || 'Doctor',
+      testName: formData.testName,
+      testType: formData.testType,
+      status: formData.status,
+      requestDate: editingTest?.requestDate || new Date().toISOString().split('T')[0],
+      completedDate: editingTest?.completedDate,
+      result: editingTest?.result,
+      reportUrl: editingTest?.reportUrl,
+      cost: editingTest?.cost ?? 0,
+      notes: formData.notes || undefined,
+    };
+
+    try {
+      setIsSaving(true);
+
+      if (editingTest) {
+        await updateDoctorLabTest(editingTest.id, payload);
+        toast.success('Lab test updated successfully');
+      } else {
+        await createDoctorLabTest(payload);
+        toast.success('Lab test requested successfully');
+      }
+
+      setIsFormOpen(false);
+      resetForm();
+      await loadData();
+    } catch (submitError) {
+      toast.error(submitError instanceof Error ? submitError.message : 'Failed to save lab test');
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
-      <DataTable
-        title="Lab Tests"
-        description="Request and manage lab tests"
-        data={filteredTests}
-        columns={columns}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        searchPlaceholder="Search by patient or test name..."
-        onAdd={handleAdd}
-        onEdit={handleEdit}
-        onDelete={handleDelete}
-        addButtonLabel="Request Test"
-      />
+      {error && <div className="text-sm text-destructive">{error}</div>}
+
+      {isLoading ? (
+        <div className="text-sm text-muted-foreground">Loading lab tests...</div>
+      ) : filteredTests.length === 0 ? (
+        <div className="rounded-md border p-8 text-center text-muted-foreground">No lab tests found.</div>
+      ) : (
+        <DataTable
+          title="Lab Tests"
+          description="Request and manage lab tests"
+          data={filteredTests}
+          columns={columns}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          searchPlaceholder="Search by patient or test name..."
+          onAdd={handleAdd}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+          addButtonLabel="Request Test"
+        />
+      )}
 
       <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
         <DialogContent className="sm:max-w-[500px]">
@@ -132,17 +218,18 @@ export function DoctorLabTests() {
             <div className="grid gap-4 py-4">
               <div className="space-y-2">
                 <Label>Patient</Label>
-                <Select value={formData.patientId} onValueChange={(v) => setFormData({ ...formData, patientId: v })}>
+                <Select value={formData.patientId} onValueChange={(value) => setFormData({ ...formData, patientId: value })}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select patient" />
                   </SelectTrigger>
                   <SelectContent>
-                    {patients.map(p => (
-                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                    {patients.map((patient) => (
+                      <SelectItem key={patient.id} value={patient.id}>{patient.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
+
               <div className="space-y-2">
                 <Label>Test Name</Label>
                 <Input
@@ -152,23 +239,25 @@ export function DoctorLabTests() {
                   required
                 />
               </div>
+
               <div className="space-y-2">
                 <Label>Test Type</Label>
-                <Select value={formData.testType} onValueChange={(v) => setFormData({ ...formData, testType: v })}>
+                <Select value={formData.testType} onValueChange={(value) => setFormData({ ...formData, testType: value })}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select test type" />
                   </SelectTrigger>
                   <SelectContent>
-                    {testTypes.map(type => (
+                    {testTypes.map((type) => (
                       <SelectItem key={type} value={type}>{type}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
+
               {editingTest && (
                 <div className="space-y-2">
                   <Label>Status</Label>
-                  <Select value={formData.status} onValueChange={(v) => setFormData({ ...formData, status: v as LabTest['status'] })}>
+                  <Select value={formData.status} onValueChange={(value) => setFormData({ ...formData, status: value as LabTest['status'] })}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -181,6 +270,7 @@ export function DoctorLabTests() {
                   </Select>
                 </div>
               )}
+
               <div className="space-y-2">
                 <Label>Notes</Label>
                 <Textarea
@@ -190,9 +280,10 @@ export function DoctorLabTests() {
                 />
               </div>
             </div>
+
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsFormOpen(false)}>Cancel</Button>
-              <Button type="submit">{editingTest ? 'Update' : 'Request'}</Button>
+              <Button type="submit" disabled={isSaving}>{isSaving ? 'Saving...' : editingTest ? 'Update' : 'Request'}</Button>
             </DialogFooter>
           </form>
         </DialogContent>

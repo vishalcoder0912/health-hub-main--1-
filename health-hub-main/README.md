@@ -3,6 +3,10 @@
 This guide is written in very simple steps.
 If you can copy-paste commands, you can run this project.
 
+## Documentation Index
+- Product Requirements: `PRD_MEDICARE_HMS.md`
+- Current Implementation Status: `IMPLEMENTATION_SUMMARY.md`
+
 ## 1. What is in this project?
 
 - `health-hub-main/` (this folder): React frontend
@@ -137,6 +141,8 @@ Make sure it has:
 
 ```env
 VITE_API_URL=http://localhost:4000/api/v1
+VITE_SUPABASE_URL=your_supabase_project_url
+VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY=your_supabase_anon_or_publishable_key
 ```
 
 ### Step C: Start frontend
@@ -231,11 +237,3 @@ Frontend:
 npm run dev
 npm run build
 ```
-
-## 10. For kids (super simple version)
-
-- Backend is the brain.
-- Frontend is the face.
-- PostgreSQL is the memory.
-- Start memory, then brain, then face.
-- Then the app works.

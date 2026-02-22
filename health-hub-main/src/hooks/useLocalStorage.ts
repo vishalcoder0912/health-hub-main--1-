@@ -17,18 +17,18 @@ function safeParse<T>(value: string | null, fallback: T): T {
 }
 
 function dedupeById<T extends WithId>(items: T[]): T[] {
-  const seen = new Set<string>();
-  const result: T[] = [];
+  const map = new Map<string, T>();
+  const withoutId: T[] = [];
+
   for (const item of items) {
-    if (!item?.id) {
-      result.push(item);
+    if (!item.id) {
+      withoutId.push(item);
       continue;
     }
-    if (seen.has(item.id)) continue;
-    seen.add(item.id);
-    result.push(item);
+    map.set(item.id, item);
   }
-  return result;
+
+  return [...withoutId, ...Array.from(map.values())];
 }
 
 export function useLocalStorage<T extends WithId>(key: string, initialValue: T[]) {
@@ -105,6 +105,7 @@ export function useLocalStorage<T extends WithId>(key: string, initialValue: T[]
 
   useEffect(() => {
     localStorage.setItem(key, JSON.stringify(data));
+
     if (!isHydratedRef.current || isApplyingRemoteRef.current) {
       previousDataRef.current = data;
       return;
@@ -123,7 +124,7 @@ export function useLocalStorage<T extends WithId>(key: string, initialValue: T[]
         setError(message);
         console.error(`[useLocalStorage:${key}:sync]`, message);
       });
-    }, 250);
+    }, 300);
   }, [data, key]);
 
   const addItem = useCallback((item: T) => {
@@ -131,9 +132,7 @@ export function useLocalStorage<T extends WithId>(key: string, initialValue: T[]
   }, []);
 
   const updateItem = useCallback((id: string, updates: Partial<T>) => {
-    setData((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, ...updates } : item))
-    );
+    setData((prev) => prev.map((item) => (item.id === id ? { ...item, ...updates } : item)));
   }, []);
 
   const deleteItem = useCallback((id: string) => {

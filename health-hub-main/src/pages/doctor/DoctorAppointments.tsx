@@ -11,12 +11,12 @@ import { Appointment } from '@/types';
 import { toast } from 'sonner';
 import { StatusBadge } from '@/components/StatusBadge';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/utils/supabase';
 import {
   createDoctorAppointment,
   deleteDoctorAppointment,
   fetchDoctorAppointments,
   fetchPatientOptions,
+  subscribeDoctorPortal,
   updateDoctorAppointment,
 } from '@/services/doctor.service';
 
@@ -46,15 +46,18 @@ export function DoctorAppointments() {
     try {
       setIsLoading(true);
       setError(null);
+
       const [appointmentRows, patientRows] = await Promise.all([
         fetchDoctorAppointments(user?.id),
         fetchPatientOptions(),
       ]);
+
       setAppointments(appointmentRows);
       setPatients(patientRows);
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : 'Failed to load appointments';
       setError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -62,16 +65,12 @@ export function DoctorAppointments() {
 
   useEffect(() => {
     void loadData();
-
-    const channel = supabase
-      .channel(`doctor-appointments-${user?.id || 'all'}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'appointments' }, () => {
-        void loadData();
-      })
-      .subscribe();
+    const unsubscribe = subscribeDoctorPortal(user?.id, () => {
+      void loadData();
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      unsubscribe();
     };
   }, [loadData, user?.id]);
 
@@ -131,6 +130,7 @@ export function DoctorAppointments() {
 
   const confirmDelete = async () => {
     if (!deleteAptId) return;
+
     try {
       await deleteDoctorAppointment(deleteAptId);
       toast.success('Appointment deleted successfully');
@@ -142,10 +142,10 @@ export function DoctorAppointments() {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const patient = patients.find((p) => p.id === formData.patientId);
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
 
+    const patient = patients.find((p) => p.id === formData.patientId);
     if (!patient) {
       toast.error('Please select a patient');
       return;
@@ -153,6 +153,7 @@ export function DoctorAppointments() {
 
     try {
       setIsSaving(true);
+
       const payload: Omit<Appointment, 'id'> = {
         patientId: formData.patientId,
         patientName: patient.name,
@@ -188,8 +189,11 @@ export function DoctorAppointments() {
   return (
     <div className="space-y-6">
       {error && <div className="text-sm text-destructive">{error}</div>}
+
       {isLoading ? (
         <div className="text-sm text-muted-foreground">Loading appointments...</div>
+      ) : filteredAppointments.length === 0 ? (
+        <div className="rounded-md border p-8 text-center text-muted-foreground">No appointments found.</div>
       ) : (
         <DataTable
           title="Appointments"
@@ -218,17 +222,18 @@ export function DoctorAppointments() {
             <div className="grid gap-4 py-4">
               <div className="space-y-2">
                 <Label>Patient</Label>
-                <Select value={formData.patientId} onValueChange={(v) => setFormData({ ...formData, patientId: v })}>
+                <Select value={formData.patientId} onValueChange={(value) => setFormData({ ...formData, patientId: value })}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select patient" />
                   </SelectTrigger>
                   <SelectContent>
-                    {patients.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                    {patients.map((patient) => (
+                      <SelectItem key={patient.id} value={patient.id}>{patient.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Date</Label>
@@ -249,10 +254,11 @@ export function DoctorAppointments() {
                   />
                 </div>
               </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Type</Label>
-                  <Select value={formData.type} onValueChange={(v) => setFormData({ ...formData, type: v as Appointment['type'] })}>
+                  <Select value={formData.type} onValueChange={(value) => setFormData({ ...formData, type: value as Appointment['type'] })}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -265,7 +271,7 @@ export function DoctorAppointments() {
                 </div>
                 <div className="space-y-2">
                   <Label>Status</Label>
-                  <Select value={formData.status} onValueChange={(v) => setFormData({ ...formData, status: v as Appointment['status'] })}>
+                  <Select value={formData.status} onValueChange={(value) => setFormData({ ...formData, status: value as Appointment['status'] })}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -278,6 +284,7 @@ export function DoctorAppointments() {
                   </Select>
                 </div>
               </div>
+
               <div className="space-y-2">
                 <Label>Notes</Label>
                 <Input
@@ -287,6 +294,7 @@ export function DoctorAppointments() {
                 />
               </div>
             </div>
+
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsFormOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={isSaving}>{isSaving ? 'Saving...' : editingApt ? 'Update' : 'Create'}</Button>
