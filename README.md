@@ -1,96 +1,61 @@
-🏥 Health Hub
+# Medicare HMS Workspace
 
-A modern healthcare web application built using React, TypeScript, and Vite, designed to provide a fast, responsive, and scalable health-focused platform.
+This root folder contains workspace-level scripts for the full Medicare HMS project.
 
-🚀 Tech Stack
+## Structure
+- `health-hub-main/` -> Frontend (React + Vite + TypeScript + Supabase)
+- `health-hub-main/backend/` -> Backend API (Node + Express + Prisma)
 
-This project is built with:
+## One-Time Setup
+From this root folder:
 
-⚡ Vite – Lightning-fast development environment
-
-⚛️ React – Component-based UI library
-
-🟦 TypeScript – Type-safe JavaScript
-
-🎨 Tailwind CSS – Utility-first styling
-
-🧩 shadcn/ui – Accessible and reusable UI components
-
-🧪 Vitest – Unit testing framework
-
-📂 Project Structure
-health-hub-main/
-│
-├── public/              # Static assets
-├── src/                 # Main application source code
-│   ├── components/      # Reusable UI components
-│   ├── pages/           # Application pages
-│   ├── hooks/           # Custom React hooks
-│   ├── lib/             # Utility functions
-│   └── main.tsx         # App entry point
-│
-├── index.html           # Root HTML file
-├── package.json         # Project dependencies
-├── tailwind.config.ts   # Tailwind configuration
-├── vite.config.ts       # Vite configuration
-└── tsconfig.json        # TypeScript configuration
-
-🛠️ Getting Started
-1️⃣ Clone the Repository
-git clone https://github.com/vishalcoder0912/health-hub-main--1-.git
-cd health-hub-main--1-/health-hub-main
-
-2️⃣ Install Dependencies
+```powershell
 npm install
+npm run install:all
+```
 
-3️⃣ Run Development Server
+## Run Project
+
+### Frontend only
+```powershell
 npm run dev
+```
+Frontend URL: `http://localhost:8080`
 
+### Backend only
+```powershell
+npm run dev:backend
+```
+Backend URL: `http://localhost:4000/api/v1`
 
-The app will start on:
+### Frontend + Backend together
+```powershell
+npm run dev:all
+```
 
-http://localhost:5173
-
-🧪 Run Tests
-npm run test
-
-📦 Build for Production
+## Build
+```powershell
 npm run build
+```
 
+## Supabase Configuration
+Frontend env file: `health-hub-main/.env`
 
-To preview the production build:
+Required keys:
 
-npm run preview
+```env
+VITE_SUPABASE_URL=your_supabase_project_url
+VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY=your_supabase_publishable_key
+VITE_API_URL=http://localhost:4000/api/v1
+```
 
-🌍 Deployment
+## CORS Configuration
+Backend env file: `health-hub-main/backend/.env`
 
-You can deploy this project on:
+Use:
 
-▲ Vercel
+```env
+CORS_ORIGIN=http://localhost:8080,http://localhost:5173
+```
 
-🚀 Netlify
-
-☁️ Firebase Hosting
-
-🌊 Render
-
-Build command:
-
-npm run build
-
-
-Publish directory:
-
-dist
-
-📌 Features
-
-Responsive healthcare UI
-
-Clean component architecture
-
-Optimized performance with Vite
-
-Type-safe development with TypeScript
-
-Scalable and maintainable folder structure
+This allows local frontend access on either common Vite port.

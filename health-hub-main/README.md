@@ -76,7 +76,7 @@ JWT_ACCESS_SECRET="health-hub-access-secret-2026-change-this"
 JWT_REFRESH_SECRET="health-hub-refresh-secret-2026-change-this"
 JWT_ACCESS_EXPIRES_IN=15m
 JWT_REFRESH_EXPIRES_IN=7d
-CORS_ORIGIN=http://localhost:5173
+CORS_ORIGIN=http://localhost:8080,http://localhost:5173
 ```
 
 Important:
@@ -154,7 +154,7 @@ npm run dev
 Frontend should run on:
 
 ```text
-http://localhost:5173
+http://localhost:8080
 ```
 
 ## 6. Demo login accounts
@@ -182,7 +182,7 @@ Examples:
 1. Start PostgreSQL
 2. Start backend (`backend`: `npm run dev`)
 3. Start frontend (`health-hub-main`: `npm run dev`)
-4. Open browser at `http://localhost:5173`
+4. Open browser at `http://localhost:8080`
 
 ## 8. Common errors and simple fixes
 

@@ -1,12 +1,21 @@
 {
-  "name": "health",
+  "name": "medicare-hms-workspace",
   "version": "1.0.0",
-  "description": "",
-  "license": "ISC",
-  "author": "",
-  "type": "commonjs",
-  "main": "index.js",
+  "private": true,
+  "description": "Workspace scripts for Medicare HMS frontend and backend",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "install:all": "npm --prefix health-hub-main install && npm --prefix health-hub-main/backend install",
+    "dev": "npm run dev:frontend",
+    "dev:frontend": "npm --prefix health-hub-main run dev",
+    "dev:backend": "npm --prefix health-hub-main/backend run dev",
+    "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "build": "npm run build:frontend && npm run build:backend",
+    "build:frontend": "npm --prefix health-hub-main run build",
+    "build:backend": "npm --prefix health-hub-main/backend run build",
+    "lint:frontend": "npm --prefix health-hub-main run lint",
+    "start:backend": "npm --prefix health-hub-main/backend run start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
   }
 }
