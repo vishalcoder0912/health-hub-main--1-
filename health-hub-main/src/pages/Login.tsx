@@ -6,7 +6,20 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Eye, EyeOff, Shield, Stethoscope, UserCheck, Syringe, Pill, FlaskConical, Receipt, User, ArrowLeft, Droplets } from 'lucide-react';
+import {
+  Eye,
+  EyeOff,
+  Shield,
+  Stethoscope,
+  UserCheck,
+  Syringe,
+  Pill,
+  FlaskConical,
+  Receipt,
+  User,
+  ArrowLeft,
+  Droplets,
+} from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { UserRole } from '@/types';
 import medicareLogo from '@/assets/medicare-logo.png';
@@ -18,6 +31,8 @@ interface PortalConfig {
   gradient: string;
   description: string;
 }
+
+type AuthMode = 'login' | 'register';
 
 const portals: PortalConfig[] = [
   { role: 'admin', label: 'Admin', icon: Shield, gradient: 'from-red-500 to-rose-600', description: 'System Administration' },
@@ -33,77 +48,120 @@ const portals: PortalConfig[] = [
 
 export default function Login() {
   const [selectedPortal, setSelectedPortal] = useState<PortalConfig | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode>('login');
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const { login } = useAuth();
+  const { login, register } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const { toast } = useToast();
 
+  const resetAuthInputs = () => {
+    setFullName('');
+    setEmail('');
+    setPassword('');
+    setConfirmPassword('');
+    setShowPassword(false);
+    setAuthMode('login');
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPortal) return;
-    
+
     setIsLoading(true);
 
-    const result = await login(email, password);
-    
-    if (result.success) {
-      const from = location.state?.from?.pathname;
-      const storedUser = localStorage.getItem('currentUser');
-      if (storedUser) {
-        const user = JSON.parse(storedUser);
-        // Validate user role matches selected portal
-        if (user.role !== selectedPortal.role) {
-          toast({
-            title: 'Access Denied',
-            description: `This account doesn't have access to the ${selectedPortal.label} portal.`,
-            variant: 'destructive',
-          });
-          setIsLoading(false);
-          return;
-        }
-        navigate(from || getDashboardPath(user.role), { replace: true });
+    if (authMode === 'register') {
+      if (!fullName.trim()) {
+        toast({ title: 'Validation Error', description: 'Full name is required.', variant: 'destructive' });
+        setIsLoading(false);
+        return;
       }
-    } else {
-      toast({
-        title: 'Login Failed',
-        description: result.error,
-        variant: 'destructive',
+
+      if (password.length < 6) {
+        toast({ title: 'Validation Error', description: 'Password must be at least 6 characters.', variant: 'destructive' });
+        setIsLoading(false);
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        toast({ title: 'Validation Error', description: 'Passwords do not match.', variant: 'destructive' });
+        setIsLoading(false);
+        return;
+      }
+
+      const result = await register({
+        email,
+        password,
+        name: fullName.trim(),
+        role: selectedPortal.role,
       });
+
+      if (!result.success) {
+        toast({ title: 'Registration Failed', description: result.error, variant: 'destructive' });
+        setIsLoading(false);
+        return;
+      }
+
+      if (result.requiresEmailVerification) {
+        toast({
+          title: 'Registration Successful',
+          description: result.message || 'Please verify your email before logging in.',
+        });
+        setAuthMode('login');
+        setPassword('');
+        setConfirmPassword('');
+        setIsLoading(false);
+        return;
+      }
+
+      if (result.user) {
+        toast({ title: 'Registration Successful', description: 'Your account has been created.' });
+        navigate(getDashboardPath(result.user.role), { replace: true });
+      }
+
+      setIsLoading(false);
+      return;
     }
-    
+
+    const result = await login(email, password, selectedPortal.role);
+
+    if (!result.success) {
+      toast({ title: 'Login Failed', description: result.error, variant: 'destructive' });
+      setIsLoading(false);
+      return;
+    }
+
+    const from = location.state?.from?.pathname;
+    const userRole = result.user?.role || selectedPortal.role;
+    navigate(from || getDashboardPath(userRole), { replace: true });
     setIsLoading(false);
   };
 
   const handleBackToPortals = () => {
     setSelectedPortal(null);
-    setEmail('');
-    setPassword('');
-    setShowPassword(false);
+    resetAuthInputs();
   };
 
-  // Portal Selection View
   if (!selectedPortal) {
     return (
       <div className="min-h-screen flex flex-col bg-gradient-to-br from-sky-50 via-cyan-50 to-teal-50">
-        {/* Header */}
         <header className="p-6 md:p-8">
           <div className="flex items-center justify-center gap-3">
             <img src={medicareLogo} alt="Medicare HMS" className="h-16 md:h-20 object-contain" />
           </div>
         </header>
 
-        {/* Main Content */}
         <main className="flex-1 flex flex-col items-center justify-center px-4 pb-8">
           <div className="text-center mb-10">
             <h1 className="text-3xl md:text-4xl font-bold text-foreground mb-3">Select Your Portal</h1>
             <p className="text-muted-foreground text-lg">Choose your role to access the system</p>
           </div>
 
-          {/* Portal Grid */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6 w-full max-w-4xl">
             {portals.map((portal) => {
               const IconComponent = portal.icon;
@@ -123,7 +181,6 @@ export default function Login() {
             })}
           </div>
 
-          {/* Demo Info */}
           <div className="mt-10 p-4 rounded-xl bg-card/80 backdrop-blur-sm border border-border max-w-md text-center">
             <p className="text-muted-foreground text-sm">
               <span className="font-semibold text-foreground">Demo Mode:</span> Use password{' '}
@@ -133,23 +190,20 @@ export default function Login() {
           </div>
         </main>
 
-        {/* Footer */}
         <footer className="p-4 text-center">
-          <p className="text-muted-foreground text-sm">© 2024 Medicare HMS. All rights reserved.</p>
+          <p className="text-muted-foreground text-sm">2026 Medicare HMS. All rights reserved.</p>
         </footer>
       </div>
     );
   }
 
-  // Login Form View
   const SelectedIcon = selectedPortal.icon;
-  
+
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-sky-50 via-cyan-50 to-teal-50">
-      {/* Header */}
       <header className="p-6">
-        <Button 
-          variant="ghost" 
+        <Button
+          variant="ghost"
           onClick={handleBackToPortals}
           className="text-foreground hover:bg-muted"
         >
@@ -158,7 +212,6 @@ export default function Login() {
         </Button>
       </header>
 
-      {/* Main Content */}
       <main className="flex-1 flex items-center justify-center px-4 pb-8">
         <Card className="w-full max-w-md border-0 shadow-2xl bg-white/95 backdrop-blur">
           <CardHeader className="text-center pb-2">
@@ -171,7 +224,39 @@ export default function Login() {
             <CardDescription>{selectedPortal.description}</CardDescription>
           </CardHeader>
           <CardContent>
+            <div className="mb-4 grid grid-cols-2 gap-2">
+              <Button
+                type="button"
+                variant={authMode === 'login' ? 'default' : 'outline'}
+                onClick={() => setAuthMode('login')}
+              >
+                Sign In
+              </Button>
+              <Button
+                type="button"
+                variant={authMode === 'register' ? 'default' : 'outline'}
+                onClick={() => setAuthMode('register')}
+              >
+                Register
+              </Button>
+            </div>
+
             <form onSubmit={handleSubmit} className="space-y-4">
+              {authMode === 'register' && (
+                <div className="space-y-2">
+                  <Label htmlFor="fullName">Full Name</Label>
+                  <Input
+                    id="fullName"
+                    type="text"
+                    placeholder="Enter your full name"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    required
+                    className="h-11"
+                  />
+                </div>
+              )}
+
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
                 <Input
@@ -184,6 +269,7 @@ export default function Login() {
                   className="h-11"
                 />
               </div>
+
               <div className="space-y-2">
                 <Label htmlFor="password">Password</Label>
                 <div className="relative">
@@ -205,18 +291,40 @@ export default function Login() {
                   </button>
                 </div>
               </div>
-              <Button 
-                type="submit" 
+
+              {authMode === 'register' && (
+                <div className="space-y-2">
+                  <Label htmlFor="confirmPassword">Confirm Password</Label>
+                  <Input
+                    id="confirmPassword"
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Re-enter your password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                    className="h-11"
+                  />
+                </div>
+              )}
+
+              <Button
+                type="submit"
                 className={`w-full h-11 bg-gradient-to-r ${selectedPortal.gradient} hover:opacity-90 transition-opacity`}
                 disabled={isLoading}
               >
-                {isLoading ? 'Signing in...' : 'Sign In'}
+                {isLoading
+                  ? authMode === 'login'
+                    ? 'Signing in...'
+                    : 'Registering...'
+                  : authMode === 'login'
+                    ? 'Sign In'
+                    : 'Create Account'}
               </Button>
             </form>
 
             <div className="mt-6 pt-6 border-t">
               <p className="text-sm text-muted-foreground text-center">
-                Demo: Use <code className="px-1.5 py-0.5 rounded bg-muted text-foreground font-mono text-xs">password123</code> for all accounts
+                Demo: Use <code className="px-1.5 py-0.5 rounded bg-muted text-foreground font-mono text-xs">password123</code> for seeded accounts
               </p>
             </div>
           </CardContent>

@@ -4,10 +4,30 @@ import { User, UserRole } from '@/types';
 import { supabase } from '@/utils/supabase';
 import { bootstrapSupabaseCollectionsToLocalStorage } from '@/lib/supabaseSync';
 
+type AuthResult =
+  | {
+      success: true;
+      user?: User;
+      requiresEmailVerification?: boolean;
+      message?: string;
+    }
+  | {
+      success: false;
+      error: string;
+    };
+
+interface RegisterInput {
+  email: string;
+  password: string;
+  name: string;
+  role: UserRole;
+}
+
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (email: string, password: string, expectedRole?: UserRole) => Promise<AuthResult>;
+  register: (payload: RegisterInput) => Promise<AuthResult>;
   logout: () => Promise<void>;
   updateUser: (updates: Partial<User>) => Promise<void>;
   isAuthenticated: boolean;
@@ -59,18 +79,19 @@ const allowedRoles: UserRole[] = [
   'bloodbank',
 ];
 
-function parseRole(supabaseUser: SupabaseUser): UserRole | null {
+function parseRole(supabaseUser: SupabaseUser, fallbackRole?: UserRole): UserRole | null {
   const rawRole =
     (supabaseUser.user_metadata?.role as string | undefined) ||
     (supabaseUser.app_metadata?.role as string | undefined) ||
+    fallbackRole ||
     null;
 
   if (!rawRole) return null;
   return allowedRoles.includes(rawRole as UserRole) ? (rawRole as UserRole) : null;
 }
 
-function mapUser(supabaseUser: SupabaseUser): User | null {
-  const role = parseRole(supabaseUser);
+function mapUser(supabaseUser: SupabaseUser, fallbackRole?: UserRole): User | null {
+  const role = parseRole(supabaseUser, fallbackRole);
   if (!role) return null;
 
   const name =
@@ -155,7 +176,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  const login = async (email: string, password: string, expectedRole?: UserRole): Promise<AuthResult> => {
     setIsLoading(true);
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -163,7 +184,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: error.message };
       }
 
-      const mapped = data.user ? mapUser(data.user) : null;
+      const existingRole = data.user ? parseRole(data.user) : null;
+      if (expectedRole && existingRole && expectedRole !== existingRole) {
+        await supabase.auth.signOut();
+        return {
+          success: false,
+          error: `This account is registered for ${existingRole} portal, not ${expectedRole}.`,
+        };
+      }
+
+      let mapped = data.user ? mapUser(data.user, expectedRole) : null;
+
+      if (data.user && !existingRole && expectedRole) {
+        const { data: updated, error: updateError } = await supabase.auth.updateUser({
+          data: {
+            ...data.user.user_metadata,
+            role: expectedRole,
+            full_name:
+              (data.user.user_metadata?.full_name as string | undefined) ||
+              (data.user.user_metadata?.name as string | undefined) ||
+              data.user.email?.split('@')[0] ||
+              'User',
+          },
+        });
+
+        if (updateError) {
+          console.error('[AuthContext:login:updateRoleMetadata]', updateError.message);
+        } else if (updated.user) {
+          mapped = mapUser(updated.user, expectedRole);
+        }
+      }
+
       if (!mapped) {
         await supabase.auth.signOut();
         return { success: false, error: 'Role metadata missing or invalid for this account.' };
@@ -174,9 +225,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem('currentUser', JSON.stringify(mapped));
       await hydrateCollections();
 
-      return { success: true };
+      return { success: true, user: mapped };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Login failed' };
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const register = async (payload: RegisterInput): Promise<AuthResult> => {
+    setIsLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: payload.email,
+        password: payload.password,
+        options: {
+          data: {
+            role: payload.role,
+            full_name: payload.name,
+            name: payload.name,
+          },
+        },
+      });
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+
+      const mapped = data.user ? mapUser(data.user, payload.role) : null;
+
+      if (data.session && mapped) {
+        setSession(data.session);
+        setUser(mapped);
+        localStorage.setItem('currentUser', JSON.stringify(mapped));
+        await hydrateCollections();
+        return { success: true, user: mapped };
+      }
+
+      return {
+        success: true,
+        user: mapped ?? undefined,
+        requiresEmailVerification: true,
+        message: 'Registration successful. Please verify your email before logging in.',
+      };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Registration failed' };
     } finally {
       setIsLoading(false);
     }
@@ -228,6 +321,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       isLoading,
       login,
+      register,
       logout,
       updateUser,
       isAuthenticated: Boolean(session && user),
